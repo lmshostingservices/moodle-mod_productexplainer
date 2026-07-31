@@ -1,0 +1,93 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<XMLDB xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+       xsi:noNamespaceSchemaLocation="../../../../lib/xmldb/xmldb.xsd"
+       PATH="mod/productexplainer/db" VERSION="2026061300029"
+       COMMENT="XMLDB file for mod/productexplainer">
+  <TABLES>
+    <TABLE NAME="productexplainer" COMMENT="Product Explainer activity instances">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="course" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Course id"/>
+        <FIELD NAME="name" TYPE="char" LENGTH="255" NOTNULL="true" COMMENT="Activity name"/>
+        <FIELD NAME="intro" TYPE="text" NOTNULL="false" COMMENT="Activity description"/>
+        <FIELD NAME="introformat" TYPE="int" LENGTH="4" NOTNULL="true" DEFAULT="0" COMMENT="Intro format"/>
+        <FIELD NAME="manifestjson" TYPE="text" NOTNULL="false" COMMENT="Generated slide manifest JSON (may be gz: compressed)"/>
+        <FIELD NAME="enablevoiceover" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" COMMENT="Enable voiceover narration"/>
+        <FIELD NAME="voicelanguage" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="en-AU" COMMENT="TTS language code"/>
+        <FIELD NAME="voicestyle" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="Zephyr" COMMENT="TTS voice name"/>
+        <FIELD NAME="requirevoiceover" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" COMMENT="Require voiceover before advancing"/>
+        <FIELD NAME="accentcolor" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="#3b82f6" COMMENT="Accent colour hex"/>
+        <FIELD NAME="slidetransition" TYPE="char" LENGTH="20" NOTNULL="true" DEFAULT="slide" COMMENT="Slide transition animation style"/>
+        <FIELD NAME="completionquiz" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" COMMENT="Require quiz pass for completion"/>
+        <FIELD NAME="completionquizpercent" TYPE="int" LENGTH="3" NOTNULL="true" DEFAULT="100" COMMENT="Minimum quiz score percent required (0-100)"/>
+        <FIELD NAME="enablecertificate" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" COMMENT="Show completion certificate to students"/>
+        <FIELD NAME="cpdpoints" TYPE="int" LENGTH="5" NOTNULL="true" DEFAULT="0" COMMENT="CPD points displayed on the certificate"/>
+        <FIELD NAME="certificatepdf" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="1" COMMENT="Allow students to download certificate as PDF"/>
+        <FIELD NAME="certificatelogourl" TYPE="char" LENGTH="1333" NOTNULL="false" DEFAULT="" COMMENT="Custom logo URL for the completion certificate"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+        <FIELD NAME="timemodified" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="course" UNIQUE="false" FIELDS="course"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="productexplainer_attempts" COMMENT="Student quiz attempt records for AI Slide Flow">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="productexplainerid" TYPE="int" LENGTH="10" NOTNULL="true" COMMENT="FK to productexplainer.id"/>
+        <FIELD NAME="userid" TYPE="int" LENGTH="10" NOTNULL="true" COMMENT="Moodle user id"/>
+        <FIELD NAME="score" TYPE="int" LENGTH="3" NOTNULL="true" DEFAULT="0" COMMENT="Quiz score 0-100 percent"/>
+        <FIELD NAME="timetaken" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Total seconds from first slide to quiz complete"/>
+        <FIELD NAME="route" TYPE="char" LENGTH="10" NOTNULL="true" COMMENT="product or concept"/>
+        <FIELD NAME="slidecount" TYPE="int" LENGTH="5" NOTNULL="true" DEFAULT="0" COMMENT="Number of slides in this attempt"/>
+        <FIELD NAME="questioncount" TYPE="int" LENGTH="5" NOTNULL="true" DEFAULT="0" COMMENT="Number of quiz questions in this attempt"/>
+        <FIELD NAME="timecreated" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="fk_productexplainerid" TYPE="foreign" FIELDS="productexplainerid" REFTABLE="productexplainer" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="userid_perid" UNIQUE="false" FIELDS="userid, productexplainerid"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="productexplainer_slidetimes" COMMENT="Time spent on each slide per attempt">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="attemptid" TYPE="int" LENGTH="10" NOTNULL="true" COMMENT="FK to productexplainer_attempts.id"/>
+        <FIELD NAME="slideidx" TYPE="int" LENGTH="5" NOTNULL="true" DEFAULT="0" COMMENT="Zero-based slide index"/>
+        <FIELD NAME="slidetype" TYPE="char" LENGTH="40" NOTNULL="true" COMMENT="Slide type e.g. product-overview"/>
+        <FIELD NAME="slidetitle" TYPE="char" LENGTH="255" NOTNULL="true" COMMENT="Display title of the slide"/>
+        <FIELD NAME="timesecs" TYPE="int" LENGTH="10" NOTNULL="true" DEFAULT="0" COMMENT="Seconds spent on this slide"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="fk_attemptid" TYPE="foreign" FIELDS="attemptid" REFTABLE="productexplainer_attempts" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="attemptid" UNIQUE="false" FIELDS="attemptid"/>
+      </INDEXES>
+    </TABLE>
+    <TABLE NAME="productexplainer_answers" COMMENT="Per-question answers per attempt">
+      <FIELDS>
+        <FIELD NAME="id" TYPE="int" LENGTH="10" NOTNULL="true" SEQUENCE="true"/>
+        <FIELD NAME="attemptid" TYPE="int" LENGTH="10" NOTNULL="true" COMMENT="FK to productexplainer_attempts.id"/>
+        <FIELD NAME="qidx" TYPE="int" LENGTH="5" NOTNULL="true" DEFAULT="0" COMMENT="Zero-based question index"/>
+        <FIELD NAME="qtext" TYPE="char" LENGTH="255" NOTNULL="true" COMMENT="Question text (truncated 255)"/>
+        <FIELD NAME="selectedidx" TYPE="int" LENGTH="3" NOTNULL="true" DEFAULT="0" COMMENT="Index of option selected (0-3)"/>
+        <FIELD NAME="correctidx" TYPE="int" LENGTH="3" NOTNULL="true" DEFAULT="0" COMMENT="Index of correct option (0-3)"/>
+        <FIELD NAME="iscorrect" TYPE="int" LENGTH="1" NOTNULL="true" DEFAULT="0" COMMENT="1 if answer was correct"/>
+      </FIELDS>
+      <KEYS>
+        <KEY NAME="primary" TYPE="primary" FIELDS="id"/>
+        <KEY NAME="fk_attemptid" TYPE="foreign" FIELDS="attemptid" REFTABLE="productexplainer_attempts" REFFIELDS="id"/>
+      </KEYS>
+      <INDEXES>
+        <INDEX NAME="attemptid" UNIQUE="false" FIELDS="attemptid"/>
+      </INDEXES>
+    </TABLE>
+  </TABLES>
+</XMLDB>
