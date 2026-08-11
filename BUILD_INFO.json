@@ -1,9 +1,9 @@
 {
   "component": "mod_productexplainer",
-  "version": "1.0.91",
-  "numeric_version": "2026062000091",
-  "build_id": "5009ebd3fb3d2ff6",
-  "build_timestamp": "2026-06-20T00:00:00.000Z",
+  "version": "1.0.102",
+  "numeric_version": "2026072300",
+  "build_id": "4c28e4eb4fa53995",
+  "build_timestamp": "2026-08-11T00:00:00.000Z",
   "folder": "mod_productexplainer",
-  "verification": "05b33f5b969c9c5c"
+  "verification": "10digit-migration-1.0.102"
 }
