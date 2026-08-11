@@ -15,28 +15,27 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 /**
- * Admin settings for mod_productexplainer.
+ * Privacy Subsystem implementation for mod_productexplainer.
  *
  * @package    mod_productexplainer
- * @copyright  2026 AI Grader
- * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
+ * @copyright  2026 LMS-Labs
+ * @license    http://www.gnu.org/licenses/gpl-3.0.html GNU GPL v3 or later
  */
 
-defined('MOODLE_INTERNAL') || die();
+namespace mod_productexplainer\privacy;
 
-if ($hassiteconfig && isset($settings)) {
-    $settings->add(new admin_setting_configtext(
-        'mod_productexplainer/siteid',
-        get_string('siteid', 'productexplainer'),
-        get_string('siteid_desc', 'productexplainer'),
-        '',
-        PARAM_TEXT
-    ));
-
-    $settings->add(new admin_setting_configpasswordunmask(
-        'mod_productexplainer/apikey',
-        get_string('apikey', 'productexplainer'),
-        get_string('apikey_desc', 'productexplainer'),
-        ''
-    ));
+/**
+ * Privacy Subsystem for mod_productexplainer implementing null_provider.
+ *
+ * @package mod_productexplainer
+ */
+class provider implements \core_privacy\local\metadata\null_provider {
+    /**
+     * Returns a reason why no user data is stored.
+     *
+     * @return string
+     */
+    public static function get_reason(): string {
+        return 'privacy:metadata';
+    }
 }

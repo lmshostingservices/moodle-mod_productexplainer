@@ -1,4 +1,19 @@
 <?php
+// This file is part of Moodle - http://moodle.org/
+//
+// Moodle is free software: you can redistribute it and/or modify
+// it under the terms of the GNU General Public License as published by
+// the Free Software Foundation, either version 3 of the License, or
+// (at your option) any later version.
+//
+// Moodle is distributed in the hope that it will be useful,
+// but WITHOUT ANY WARRANTY; without even the implied warranty of
+// MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+// GNU General Public License for more details.
+//
+// You should have received a copy of the GNU General Public License
+// along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
+
 /**
  * Product Explainer - View page.
  *
@@ -100,7 +115,7 @@ $PAGE->requires->js_call_amd('mod_productexplainer/player', 'init', [[
     'studentName'          => fullname($USER),
     'activityName'         => format_string($pe->name),
     'siteName'             => format_string($SITE->fullname),
-    'siteLogoUrl'          => (function() use ($OUTPUT, $pe) {
+    'siteLogoUrl'          => (function () use ($OUTPUT, $pe) {
         // Teacher-configured logo takes priority
         if (!empty($pe->certificatelogourl)) return clean_param($pe->certificatelogourl, PARAM_URL);
         // Fall back to Moodle theme logo
