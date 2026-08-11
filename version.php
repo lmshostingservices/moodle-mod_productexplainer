@@ -24,7 +24,7 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version   = 2026072300234;
+$plugin->version   = 2026072300;
 $plugin->requires  = 2022041900;
 $plugin->component = 'mod_productexplainer';
 $plugin->maturity  = MATURITY_STABLE;
