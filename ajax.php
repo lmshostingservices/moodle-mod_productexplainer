@@ -46,7 +46,7 @@ require_login();
         require_once($aiconfiglib);
     }
 
-    $sesskey = optional_param('sesskey', '', PARAM_RAW);
+    $sesskey = optional_param('sesskey', '', PARAM_RAW); // pipeline-ignore: PARAM_RAW — opaque session key token, validated via confirm_sesskey()
     if (!confirm_sesskey($sesskey)) {
         echo json_encode(['success' => false, 'error' => 'Session expired. Please refresh the page.']);
         exit;
