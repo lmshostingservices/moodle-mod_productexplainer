@@ -43,7 +43,7 @@ if (!has_capability('mod/productexplainer:manage', $context) && !has_capability(
 }
 
 $PAGE->set_url('/mod/productexplainer/report.php', ['id' => $id]);
-$PAGE->set_title(format_string($pe->name) . ' \u2014 Reports');
+$PAGE->set_title(format_string($pe->name) . ' - ' . get_string('viewreports', 'productexplainer'));
 $PAGE->set_heading(format_string($course->fullname));
 $PAGE->set_context($context);
 

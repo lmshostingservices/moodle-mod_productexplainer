@@ -178,6 +178,18 @@ require_login();
         if ($slideCount > 20) $slideCount = 20;
         $creditsToUse = max(1, (int)floor($slideCount * 5 / 3));
 
+        // FIX-QUIZCOUNT-DROPPED: the builder sends the teacher's chosen number of quiz
+        // questions as quizCount, but it was never read here and never forwarded to the
+        // generator, so the AI always returned its own default (5) no matter what the
+        // teacher selected. Clamp to the same 1-10 range the builder input enforces.
+        $quizcount = (int)($body['quizCount'] ?? 5);
+        if ($quizcount < 1) {
+            $quizcount = 1;
+        }
+        if ($quizcount > 10) {
+            $quizcount = 10;
+        }
+
         if (empty($productName)) {
             echo json_encode(['success' => false, 'error' => 'Product name is required.']);
             exit;
@@ -198,6 +210,8 @@ require_login();
             'productName'     => $productName,
             'documentContent' => $docContent,
             'slideCount'      => $slideCount,
+            'quizCount'       => $quizcount,
+            'questionCount'   => $quizcount,
             'creditsToUse'    => $creditsToUse,
             'voiceLanguage'   => $productVoiceLanguage,
         ]);
@@ -217,6 +231,16 @@ require_login();
         $learnerRole     = trim($body['learnerRole'] ?? '');
         $objective       = trim($body['learningObjective'] ?? '');
         $ownContent      = trim($body['ownContent'] ?? '');
+
+        // FIX-QUIZCOUNT-DROPPED: see generate_slides above — quizCount was sent by the
+        // concept builder but never forwarded to the generator.
+        $quizcount = (int)($body['quizCount'] ?? 5);
+        if ($quizcount < 1) {
+            $quizcount = 1;
+        }
+        if ($quizcount > 10) {
+            $quizcount = 10;
+        }
 
         if (empty($conceptName)) {
             echo json_encode(['success' => false, 'error' => 'Concept name is required.']);
@@ -240,6 +264,8 @@ require_login();
             'learnerRole'      => $learnerRole,
             'learningObjective' => $objective,
             'ownContent'       => $ownContent,
+            'quizCount'        => $quizcount,
+            'questionCount'    => $quizcount,
             'creditsToUse'     => 10,
             'voiceLanguage'    => $conceptVoiceLanguage,
         ]);

@@ -117,14 +117,21 @@ $PAGE->requires->js_call_amd('mod_productexplainer/player', 'init', [[
     'siteName'             => format_string($SITE->fullname),
     'siteLogoUrl'          => (function () use ($OUTPUT, $pe) {
         // Teacher-configured logo takes priority
-        if (!empty($pe->certificatelogourl)) return clean_param($pe->certificatelogourl, PARAM_URL);
+        if (!empty($pe->certificatelogourl)) {
+            return clean_param($pe->certificatelogourl, PARAM_URL);
+        }
         // Fall back to Moodle theme logo
         try {
             $u = $OUTPUT->get_compact_logo_url(0, 80);
-            if ($u) return $u->out(false);
+            if ($u) {
+                return $u->out(false);
+            }
             $u = $OUTPUT->get_logo_url(0, 80);
-            if ($u) return $u->out(false);
-        } catch (Exception $e) {}
+            if ($u) {
+                return $u->out(false);
+            }
+        } catch (Exception $e) {
+        }
         return '';
     })(),
     'canManage'            => $canManage,
@@ -139,14 +146,40 @@ echo '<div id="pe-app" class="pe-app" data-cmid="' . $cm->id . '">';
 echo '<div id="pe-loading" class="pe-loading"><div class="pe-spinner"></div><p>Loading...</p></div>';
 echo '</div>';
 
-// Edit button + Reports link for teachers when viewing locked content.
-if ($canManage && $hasManifest && !$builderMode) {
+// Edit button + Reports link + content download for teachers.
+if ($canManage && $hasManifest) {
     $editurl   = new moodle_url('/mod/productexplainer/view.php', ['id' => $id, 'edit' => 1]);
     $reporturl = new moodle_url('/mod/productexplainer/report.php', ['id' => $id]);
     echo '<div class="pe-edit-bar">';
-    echo html_writer::link($editurl, 'Edit slides', ['class' => 'btn btn-secondary btn-sm']);
+    if (!$builderMode) {
+        echo html_writer::link(
+            $editurl,
+            get_string('editslides', 'productexplainer'),
+            ['class' => 'btn btn-secondary btn-sm']
+        );
+        echo ' ';
+        echo html_writer::link(
+            $reporturl,
+            get_string('viewreports', 'productexplainer'),
+            ['class' => 'btn btn-primary btn-sm']
+        );
+        echo ' ';
+    }
+    // FEAT-CONTENT-EXPORT: download the generated slide + quiz content for reuse in
+    // other plugins. Teacher-only, because the export includes the quiz answer key.
+    echo html_writer::span(get_string('exportcontent', 'productexplainer') . ':', 'pe-export-label');
     echo ' ';
-    echo html_writer::link($reporturl, 'View Reports', ['class' => 'btn btn-primary btn-sm']);
+    foreach (['txt' => 'exporttxt', 'md' => 'exportmd', 'json' => 'exportjson'] as $fmt => $strkey) {
+        $exporturl = new moodle_url('/mod/productexplainer/export.php', [
+            'id' => $id, 'format' => $fmt, 'sesskey' => sesskey(),
+        ]);
+        echo html_writer::link(
+            $exporturl,
+            get_string($strkey, 'productexplainer'),
+            ['class' => 'btn btn-outline-secondary btn-sm']
+        );
+        echo ' ';
+    }
     echo '</div>';
 }
 

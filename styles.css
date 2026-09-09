@@ -2148,6 +2148,32 @@
     text-align: right;
 }
 
+/* FEAT-CONTENT-EXPORT: teacher-only download links (activity bar + course index). */
+.pe-edit-bar .pe-export-label {
+    font-size: 0.8125rem;
+    color: #4b5563;
+    margin-left: 10px;
+}
+.pe-export-bar {
+    margin: 8px 0 20px;
+    padding: 14px 16px;
+    background: #f9fafb;
+    border: 1px solid #e5e7eb;
+    border-radius: 8px;
+}
+.pe-export-bar .pe-export-label {
+    margin: 0 0 6px;
+    font-size: 0.8125rem;
+    font-weight: 600;
+    color: #374151;
+}
+.pe-export-bar .pe-export-links {
+    margin-bottom: 12px;
+}
+.pe-export-bar .pe-export-links:last-child {
+    margin-bottom: 0;
+}
+
 /* ── Responsive ─────────────────────────────────────────────────────────────── */
 @media (max-width: 640px) {
     /* Player inner — let content drive height */
@@ -3729,6 +3755,7 @@
     margin-top: 4px;
 }
 .pe-quiz-retake-btn,
+.pe-quiz-retry-wrong-btn,
 .pe-quiz-back-btn {
     display: flex;
     align-items: center;
@@ -3741,6 +3768,23 @@
     cursor: pointer;
     transition: opacity 0.15s, transform 0.1s;
 }
+/* FEAT-QUIZ-RETRY-WRONG: primary action when questions are still outstanding —
+   amber so it reads as "unfinished business" next to the neutral full retake. */
+.pe-quiz-retry-wrong-btn {
+    background: linear-gradient(135deg, #f59e0b, #d97706);
+    color: #fff;
+}
+.pe-quiz-retry-wrong-btn svg { width: 14px; height: 14px; stroke: #fff; fill: none; }
+.pe-quiz-retry-wrong-btn:hover  { opacity: 0.9; }
+.pe-quiz-retry-wrong-btn:active { transform: scale(0.97); }
+/* FEAT-PASS-MARK-WIRED: pass mark shown under the score stats. */
+.pe-quiz-passmark-note {
+    margin: 2px 0 0;
+    font-size: 0.8125rem;
+    color: #4b5563;
+    text-align: center;
+}
+.pe-quiz-passmark-note strong { color: #111827; }
 .pe-quiz-retake-btn {
     background: linear-gradient(135deg, #7c3aed, #4f46e5);
     color: #fff;
@@ -3918,6 +3962,7 @@
 .pe-quiz-check-btn,
 .pe-quiz-next-btn,
 .pe-quiz-retake-btn,
+.pe-quiz-retry-wrong-btn,
 .pe-quiz-back-btn,
 .pe-back-btn {
     min-height: 44px;

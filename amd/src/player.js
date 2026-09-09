@@ -74,10 +74,21 @@ define('mod_productexplainer/player', [], function() {
 
     // ── Quiz state ───────────────────────────────────────────────────────────
     var quizQuestions  = [];   // from manifest.quizQuestions
-    var quizCurrentQ   = 0;
-    var quizScore      = 0;
+    var quizCurrentQ   = 0;    // position within quizOrder (NOT the question index)
+    var quizScore      = 0;    // derived from quizResultMap — see recalcQuizScore()
     var quizSelected   = null;  // selected option index (0–3)
     var quizAnswered   = false;
+    // FEAT-QUIZ-RETRY-WRONG: quizOrder holds the question indices presented in the
+    // current run. A full run is [0..n-1]; a "retry incorrect" run holds only the
+    // indices the student got wrong. quizResultMap remembers the outcome of every
+    // question across runs (real question index -> true/false) so a retry of one
+    // wrong question lifts the score for the whole quiz instead of restarting it.
+    var quizOrder      = [];
+    var quizResultMap  = {};
+    var quizRetryMode  = false;
+    var quizPassed     = false; // whether the last completed run met the pass mark
+    var quizNextTimer  = null;  // pending 'unstick the Next button' safety timer
+    var quizAttemptSaved = false; // slide-time data is only sent with the first save of a sitting
     var quizAudioCtx   = null;
     var quizCurrentAudio = null; // currently-playing Chirp HD quiz audio element
     var quizTtsGenId     = 0;   // incremented on each speakQuizText call; stale AJAX responses are discarded
@@ -794,9 +805,10 @@ define('mod_productexplainer/player', [], function() {
             if (data && data.success && data.manifest) {
                 manifest = data.manifest;
                 manifest.mode = 'product';
+                var qWarn = reconcileQuizCount(manifest, selectedQuizCount);
                 var voDesc = document.getElementById('pe-vo-panel-desc');
                 if (voDesc) voDesc.innerHTML = voPanelDesc(selectedSlideCount);
-                showStatus('pe-generate-status', 'Slides generated! Generating AI images...', 'success');
+                showStatus('pe-generate-status', 'Slides generated! Generating AI images...' + qWarn, 'success');
                 showBuilderSlides();
                 generateConceptImages();
             } else {
@@ -843,7 +855,8 @@ define('mod_productexplainer/player', [], function() {
             if (data && data.success && data.manifest) {
                 manifest = data.manifest;
                 manifest.mode = 'concept';
-                showStatus('pe-concept-generate-status', 'Slides generated! Generating AI images for each slide...', 'success');
+                var qWarn = reconcileQuizCount(manifest, selectedQuizCount);
+                showStatus('pe-concept-generate-status', 'Slides generated! Generating AI images for each slide...' + qWarn, 'success');
                 showBuilderSlides();
                 setTimeout(generateConceptImages, 400);
             } else {
@@ -1744,7 +1757,7 @@ define('mod_productexplainer/player', [], function() {
 
         if (nextBtn) nextBtn.addEventListener('click', function() {
             if (currentSlide === slides.length - 1 && !isBuilderPreview && quizQuestions.length > 0) {
-                showQuiz();
+                showQuiz(false);
                 return;
             }
             if (currentSlide < slides.length - 1) {
@@ -1781,10 +1794,16 @@ define('mod_productexplainer/player', [], function() {
         // Keyboard navigation
         document.addEventListener('keydown', function(e) {
             var tag = document.activeElement ? document.activeElement.tagName : '';
-            if (tag === 'INPUT' || tag === 'TEXTAREA') return;
+            if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
+            if (document.activeElement && document.activeElement.isContentEditable) return;
+            // FIX-QUIZ-KEYNAV: slide navigation must not run while the quiz overlay is
+            // open. It used to re-enter showQuiz(), which restarts the quiz from question
+            // one — wiping the student's answers mid-quiz, and (since the retry feature)
+            // wiping the results of the whole preceding run as well.
+            if (isQuizOpen()) return;
             if (e.key === 'ArrowRight' || e.key === 'ArrowDown') {
                 if (currentSlide === slides.length - 1 && !isBuilderPreviewMode && quizQuestions.length > 0) {
-                    showQuiz();
+                    showQuiz(false);
                     return;
                 }
                 if (currentSlide < slides.length - 1) {
@@ -1824,12 +1843,15 @@ define('mod_productexplainer/player', [], function() {
             }, { passive: true });
             viewport.addEventListener('touchend', function(e) {
                 if (!moved) return;
+                // FIX-QUIZ-KEYNAV: same guard as the keyboard handler — a swipe behind the
+                // quiz overlay must not restart the quiz.
+                if (isQuizOpen()) return;
                 var dx = e.changedTouches[0].clientX - startX;
                 var dy = e.changedTouches[0].clientY - startY;
                 if (Math.abs(dx) < 40 || Math.abs(dx) < Math.abs(dy)) return;
                 if (dx < 0) {
                     // swipe left → next
-                    if (currentSlide === slides.length - 1 && !isBuilderPreviewMode && quizQuestions.length > 0) { showQuiz(); return; }
+                    if (currentSlide === slides.length - 1 && !isBuilderPreviewMode && quizQuestions.length > 0) { showQuiz(false); return; }
                     if (currentSlide < slides.length - 1) {
                         if (!canAdvanceFromSlide(currentSlide, slides)) return;
                         currentSlide++;
@@ -1885,7 +1907,7 @@ define('mod_productexplainer/player', [], function() {
 
         // Quiz CTA button
         var quizCtaBind = document.getElementById('pe-quiz-cta-btn');
-        if (quizCtaBind) quizCtaBind.addEventListener('click', showQuiz);
+        if (quizCtaBind) quizCtaBind.addEventListener('click', function() { showQuiz(false); });
 
         // Certificate footer button (no-quiz path)
         var certFooterBind = document.getElementById('pe-cert-footer-btn');
@@ -3426,7 +3448,95 @@ define('mod_productexplainer/player', [], function() {
         speakQuizTextWebSpeech(text, onEnd);
     }
 
-    function showQuiz() {
+    /**
+     * FIX-QUIZCOUNT-DROPPED (client safety net).
+     * Make the generated manifest honour the number of questions the teacher asked for.
+     * If the generator returns more, trim the extras. If it returns fewer, we cannot
+     * invent them — so say so plainly rather than silently showing the wrong number.
+     *
+     * @param  {object} m        The generated manifest.
+     * @param  {number} wanted   Questions the teacher requested.
+     * @return {string} HTML-safe suffix to append to the status message ('' if exact).
+     */
+    function reconcileQuizCount(m, wanted) {
+        if (!m || !Array.isArray(m.quizQuestions)) return '';
+        var got = m.quizQuestions.length;
+        if (!wanted || got === wanted) return '';
+        if (got > wanted) {
+            m.quizQuestions = m.quizQuestions.slice(0, wanted);
+            return '';
+        }
+        return ' Note: the generator returned ' + got + ' of the ' + wanted + ' quiz questions you asked for.'
+            + ' Regenerate if you need the full set.';
+    }
+
+    /**
+     * Whether the quiz overlay is currently on screen.
+     *
+     * Slide navigation (keyboard, swipe) must be inert while it is, or it re-enters
+     * showQuiz() and destroys the run in progress.
+     *
+     * @return {boolean}
+     */
+    function isQuizOpen() {
+        var o = document.getElementById('pe-quiz-overlay');
+        return !!(o && o.style.display && o.style.display !== 'none');
+    }
+
+    /**
+     * Cancel the pending "re-enable Next" safety timer.
+     *
+     * The timer is keyed to the button id, which every question reuses, so a timer left
+     * over from a previous question would otherwise enable Next on the current one before
+     * its feedback had finished playing.
+     */
+    function clearQuizNextTimer() {
+        if (quizNextTimer) {
+            clearTimeout(quizNextTimer);
+            quizNextTimer = null;
+        }
+    }
+
+    // FEAT-PASS-MARK-WIRED: single source of truth for the pass mark.
+    // When the teacher has enabled the "pass the knowledge quiz" completion rule we use
+    // the percentage they configured (completionquizpercent). Otherwise there is no
+    // teacher-set threshold, so we fall back to 80% — the value the UI used to hardcode.
+    function getQuizPassMark() {
+        var pct = parseInt(cfg.completionQuizPct, 10);
+        if (cfg.completionQuiz && !isNaN(pct) && pct > 0 && pct <= 100) return pct;
+        return 80;
+    }
+
+    // Real question index currently on screen.
+    function currentQuizIdx() {
+        return quizOrder.length ? quizOrder[quizCurrentQ] : 0;
+    }
+
+    // Score is always counted across the WHOLE quiz, not just the questions in this run.
+    function recalcQuizScore() {
+        var n = 0;
+        for (var i = 0; i < quizQuestions.length; i++) {
+            if (quizResultMap[i] === true) n++;
+        }
+        quizScore = n;
+        return n;
+    }
+
+    // Indices of every question not yet answered correctly.
+    function getWrongQuizIdx() {
+        var out = [];
+        for (var i = 0; i < quizQuestions.length; i++) {
+            if (quizResultMap[i] !== true) out.push(i);
+        }
+        return out;
+    }
+
+    /**
+     * Open the quiz.
+     * @param {boolean} retryWrongOnly When true, re-present only the questions the
+     *        student has not yet answered correctly, keeping their existing score.
+     */
+    function showQuiz(retryWrongOnly) {
         if (isBuilderPreviewMode) return;
         if (!quizQuestions.length) return;
 
@@ -3437,21 +3547,43 @@ define('mod_productexplainer/player', [], function() {
         stopQuizAudio();
         isPlayingAudio = false;
 
-        // Reset quiz state
+        quizRetryMode = (retryWrongOnly === true);
+
+        if (quizRetryMode) {
+            // Keep quizResultMap and attemptAnswers — only the wrong ones are re-asked.
+            quizOrder = getWrongQuizIdx();
+            if (!quizOrder.length) { showQuizResults(); return; }
+        } else {
+            // Full run: wipe every remembered outcome and start from question 1.
+            quizResultMap = {};
+            quizOrder = [];
+            for (var i = 0; i < quizQuestions.length; i++) quizOrder.push(i);
+            attemptAnswers   = [];
+            attemptStartTime = Date.now();
+            // Must clear too, or a pass recorded before a retake stays true for the whole
+            // of the new run and leaves the certificate gate open.
+            quizPassed       = false;
+            quizAttemptSaved = false;
+        }
+        clearQuizNextTimer();
+
         quizCurrentQ = 0;
-        quizScore    = 0;
         quizSelected = null;
         quizAnswered = false;
         prefetchAudioMap = {};
-        // Reset per-answer tracking for this quiz attempt
-        attemptAnswers   = [];
-        attemptStartTime = Date.now();
+        recalcQuizScore();
 
         var overlay = document.getElementById('pe-quiz-overlay');
         if (!overlay) return;
         overlay.style.display = 'flex';
 
-        renderQuizSplash();
+        // A retry goes straight to the first outstanding question — the student has
+        // already seen the intro splash, and re-showing it just adds a click.
+        if (quizRetryMode) {
+            renderQuizQuestion(0);
+        } else {
+            renderQuizSplash();
+        }
     }
 
     function renderQuizSplash() {
@@ -3469,7 +3601,8 @@ define('mod_productexplainer/player', [], function() {
         html += '<div class="pe-quiz-splash-info">';
         html += '<div class="pe-quiz-splash-stat"><span class="pe-quiz-splash-stat-val">' + total + '</span><span class="pe-quiz-splash-stat-lbl">Questions</span></div>';
         html += '<div class="pe-quiz-splash-divider"></div>';
-        html += '<div class="pe-quiz-splash-stat"><span class="pe-quiz-splash-stat-val">80%</span><span class="pe-quiz-splash-stat-lbl">To Pass</span></div>';
+        // FEAT-PASS-MARK-WIRED: show the teacher's actual pass mark, not a hardcoded 80%.
+        html += '<div class="pe-quiz-splash-stat"><span class="pe-quiz-splash-stat-val">' + getQuizPassMark() + '%</span><span class="pe-quiz-splash-stat-lbl">To Pass</span></div>';
         html += '</div>';
         html += '<div class="pe-quiz-splash-voice">';
         html += '<svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M3 18v-6a9 9 0 0 1 18 0v6"/><path d="M21 19a2 2 0 0 1-2 2h-1a2 2 0 0 1-2-2v-3a2 2 0 0 1 2-2h3zM3 19a2 2 0 0 0 2 2h1a2 2 0 0 0 2-2v-3a2 2 0 0 0-2-2H3z"/></svg>';
@@ -3495,28 +3628,43 @@ define('mod_productexplainer/player', [], function() {
         // Reset per-question state so options are selectable on every new question.
         quizAnswered = false;
         quizSelected = null;
-        var q      = quizQuestions[idx];
-        var total  = quizQuestions.length;
-        var pct    = Math.round((idx / total) * 100);
+        clearQuizNextTimer();
+        // `idx` is a position within quizOrder, which in a retry run holds only the
+        // question indices the student still has to get right.
+        quizCurrentQ = idx;
+        var realIdx = currentQuizIdx();
+        var q      = quizQuestions[realIdx];
+        if (!q) { showQuizResults(); return; }
+        var runTotal = quizOrder.length;
+        // Progress reflects questions completed, so the bar reaches 100% on the last one.
+        var pct    = Math.round(((idx + 1) / runTotal) * 100);
         var letters = ['A','B','C','D'];
 
         var optHtml = '';
         (q.options || []).forEach(function(opt, i) {
             var txt = String(opt || '').replace(/\.\s*$/, '').trim();
             if (txt.length) txt = txt.charAt(0).toUpperCase() + txt.slice(1);
+            // letters[] only covers A-D; fall back to a number so a 5th+ option from the
+            // generator does not render the literal text "undefined".
+            var letter = letters[i] || String(i + 1);
             optHtml += '<div class="pe-quiz-option" data-index="' + i + '">'
-                + '<span class="pe-quiz-option-letter">' + letters[i] + '</span>'
+                + '<span class="pe-quiz-option-letter">' + letter + '</span>'
                 + '<span class="pe-quiz-option-text">' + escHtml(txt) + '</span>'
                 + '</div>';
         });
 
-        var isLast = (idx === total - 1);
+        var isLast = (idx === runTotal - 1);
         var html = '<div class="pe-quiz-question-wrap">';
         html += '<div class="pe-quiz-header">';
         html += '<div class="pe-quiz-prog-track"><div class="pe-quiz-prog-fill" style="width:' + pct + '%"></div></div>';
         html += '<div class="pe-quiz-header-bar">';
-        html += '<span class="pe-quiz-counter">' + icon('clipboard') + 'Question&nbsp;' + (idx + 1) + '&nbsp;of&nbsp;' + total + '</span>';
-        html += '<span class="pe-quiz-score-badge">' + quizScore + '/' + total + ' correct</span>';
+        if (quizRetryMode) {
+            html += '<span class="pe-quiz-counter">' + icon('zap') + 'Retry&nbsp;' + (idx + 1) + '&nbsp;of&nbsp;' + runTotal
+                + '&nbsp;&bull;&nbsp;Q' + (realIdx + 1) + '</span>';
+        } else {
+            html += '<span class="pe-quiz-counter">' + icon('clipboard') + 'Question&nbsp;' + (idx + 1) + '&nbsp;of&nbsp;' + runTotal + '</span>';
+        }
+        html += '<span class="pe-quiz-score-badge">' + quizScore + '/' + quizQuestions.length + ' correct</span>';
         html += '</div></div>';
 
         html += '<div class="pe-quiz-body">';
@@ -3562,11 +3710,11 @@ define('mod_productexplainer/player', [], function() {
         var cb = document.getElementById('pe-quiz-check-btn');
         if (cb) cb.disabled = false;
         // Pre-generate feedback TTS now so it's ready the instant Check is clicked
-        var q = quizQuestions[quizCurrentQ];
+        var q = quizQuestions[currentQuizIdx()];
         if (q) {
             var letters = ['A','B','C','D'];
             var isOk = (idx === q.correctAnswer);
-            var prefix = isOk ? 'Correct! ' : 'The correct answer is ' + letters[q.correctAnswer] + '. ';
+            var prefix = isOk ? 'Correct! ' : 'The correct answer is ' + (letters[q.correctAnswer] || String((q.correctAnswer || 0) + 1)) + '. ';
             prefetchFeedbackTts(prefix + (q.explanation || ''));
         }
     }
@@ -3574,22 +3722,35 @@ define('mod_productexplainer/player', [], function() {
     function checkQuizAnswer() {
         if (quizSelected === null || quizAnswered) return;
         quizAnswered = true;
-        var q       = quizQuestions[quizCurrentQ];
+        var realIdx = currentQuizIdx();
+        var q       = quizQuestions[realIdx];
         var correct = q.correctAnswer;
         var isOk    = (quizSelected === correct);
         var letters = ['A','B','C','D'];
-        // Record answer for reporting payload
+
+        // Remember the outcome against the REAL question index so a later "retry the
+        // ones I got wrong" run updates this question rather than appending a duplicate.
+        quizResultMap[realIdx] = isOk;
+
+        // Record answer for reporting payload — replace any earlier answer to the same
+        // question so a retry reports the student's final answer, not both attempts.
         if (!isBuilderPreviewMode) {
-            attemptAnswers.push({
-                qidx:        quizCurrentQ,
+            var rec = {
+                qidx:        realIdx,
                 qtext:       (q && q.question ? q.question : '').slice(0, 255),
                 selectedidx: quizSelected,
                 correctidx:  correct,
                 iscorrect:   isOk ? 1 : 0
-            });
+            };
+            var replaced = false;
+            for (var ai = 0; ai < attemptAnswers.length; ai++) {
+                if (attemptAnswers[ai].qidx === realIdx) { attemptAnswers[ai] = rec; replaced = true; break; }
+            }
+            if (!replaced) attemptAnswers.push(rec);
         }
 
-        if (isOk) { quizScore++; playQuizCorrectSound(); }
+        recalcQuizScore();
+        if (isOk) { playQuizCorrectSound(); }
         else       { playQuizIncorrectSound(); }
 
         // Style option cards
@@ -3612,7 +3773,7 @@ define('mod_productexplainer/player', [], function() {
             } else {
                 fbHtml = '<div class="pe-quiz-fb pe-quiz-fb--incorrect">'
                     + '<span class="pe-quiz-fb-icon">' + icon('alert') + '</span>'
-                    + '<div class="pe-quiz-fb-body"><strong>The correct answer is&nbsp;' + letters[correct] + '.</strong><br>'
+                    + '<div class="pe-quiz-fb-body"><strong>The correct answer is&nbsp;' + (letters[correct] || String((correct || 0) + 1)) + '.</strong><br>'
                     + escHtml(q.explanation || '') + '</div></div>';
             }
             fb.innerHTML = fbHtml;
@@ -3625,16 +3786,30 @@ define('mod_productexplainer/player', [], function() {
             }, 10);
 
             // Speak explanation — if incorrect, re-enable Next only after speech ends
-            var spokenPrefix = isOk ? 'Correct! ' : 'The correct answer is ' + letters[correct] + '. ';
+            var spokenPrefix = isOk ? 'Correct! ' : 'The correct answer is ' + (letters[correct] || String((correct || 0) + 1)) + '. ';
             speakQuizText(spokenPrefix + (q.explanation || ''), !isOk ? function() {
                 var nbEl = document.getElementById('pe-quiz-next-btn');
                 if (nbEl) nbEl.disabled = false;
             } : null);
+            // FIX-NEXT-BTN-STRANDED: several TTS paths (stale generation id, prefetch
+            // timeout) return without ever calling onEnd, which used to leave the student
+            // stuck on the feedback screen with a permanently disabled Next button.
+            // This safety net always re-enables it.
+            if (!isOk) {
+                clearQuizNextTimer();
+                quizNextTimer = setTimeout(function() {
+                    quizNextTimer = null;
+                    var nbEl = document.getElementById('pe-quiz-next-btn');
+                    if (nbEl) nbEl.disabled = false;
+                }, 12000);
+            }
             // FIX-QUIZ-NEXT-Q-AUDIO-DELAY: Pre-warm next question's TTS while student reads
             // feedback — 1.5 s delay lets speakQuizText consume the feedback cache first.
-            var _nextQIdx = quizCurrentQ + 1;
-            if (_nextQIdx < quizQuestions.length) {
-                var _nextQText = quizQuestions[_nextQIdx].question || '';
+            // Follows quizOrder so a retry run pre-warms the next OUTSTANDING question.
+            var _nextPos = quizCurrentQ + 1;
+            if (_nextPos < quizOrder.length) {
+                var _nextQ = quizQuestions[quizOrder[_nextPos]];
+                var _nextQText = _nextQ ? (_nextQ.question || '') : '';
                 if (_nextQText) {
                     setTimeout(function() { prefetchFeedbackTts(_nextQText); }, 1500);
                 }
@@ -3653,9 +3828,11 @@ define('mod_productexplainer/player', [], function() {
 
     function advanceQuiz() {
         stopQuizAudio();
-        quizCurrentQ++;
-        if (quizCurrentQ < quizQuestions.length) {
-            renderQuizQuestion(quizCurrentQ);
+        clearQuizNextTimer();
+        // quizCurrentQ walks quizOrder, which is the full question list on a normal run
+        // and only the outstanding questions on a "retry incorrect" run.
+        if (quizCurrentQ + 1 < quizOrder.length) {
+            renderQuizQuestion(quizCurrentQ + 1);
         } else {
             showQuizResults();
         }
@@ -3664,15 +3841,26 @@ define('mod_productexplainer/player', [], function() {
     function showQuizResults() {
         var overlay = document.getElementById('pe-quiz-overlay');
         if (!overlay) return;
+        recalcQuizScore();
         var total     = quizQuestions.length;
-        var pct       = Math.round((quizScore / total) * 100);
+        var pct       = total ? Math.round((quizScore / total) * 100) : 0;
         var incorrect = total - quizScore;
         var isPerfect = (pct === 100);
+        // FEAT-PASS-MARK-WIRED: everything celebratory below is gated on the teacher's
+        // configured pass mark instead of the old hardcoded 60% / 80% literals.
+        var passMark  = getQuizPassMark();
+        var passed    = (pct >= passMark);
+        quizPassed    = passed;
+        var wrongIdx  = getWrongQuizIdx();
 
         // Report rich attempt data to server for completion tracking (fire-and-forget).
         if (!isBuilderPreviewMode) {
-            // Finalise dwell time on the last slide before the results screen
-            if (slideEntryTime > 0 && lastSlideIdx >= 0) {
+            // FIX-DWELL-INFLATION: finalise the last slide's dwell time ONCE, on the first
+            // results screen of this sitting. slideEntryTime is not touched by the quiz
+            // overlay, so recomputing it on a retry's results screen would charge the
+            // final slide with the entire quiz + results-reading + retry duration, and
+            // overwrite the honest first value.
+            if (!quizAttemptSaved && slideEntryTime > 0 && lastSlideIdx >= 0) {
                 var secsOnLast = Math.round((Date.now() - slideEntryTime) / 1000);
                 var ls = manifest && manifest.slides && manifest.slides[lastSlideIdx];
                 attemptSlideTimes[lastSlideIdx] = {
@@ -3683,7 +3871,14 @@ define('mod_productexplainer/player', [], function() {
                 };
             }
             var totalTimeSecs = Math.round((Date.now() - attemptStartTime) / 1000);
-            var slideTimesArr = Object.keys(attemptSlideTimes).map(function(k) { return attemptSlideTimes[k]; });
+            // FIX-DUPLICATE-SLIDETIMES: only the first save of a sitting carries the
+            // per-slide dwell data. A retry produces a second attempt row, and re-sending
+            // the identical slide times would double-count every slide in the teacher's
+            // "average time per slide" chart.
+            var slideTimesArr = quizAttemptSaved ? [] : Object.keys(attemptSlideTimes).map(function(k) {
+                return attemptSlideTimes[k];
+            });
+            quizAttemptSaved = true;
             ajaxPost(
                 cfg.ajaxUrl,
                 { action: 'save_attempt', cmid: cfg.cmid, sesskey: cfg.sesskey },
@@ -3701,17 +3896,26 @@ define('mod_productexplainer/player', [], function() {
             );
         }
 
-        if (pct >= 80) playQuizFanfare();
+        if (passed) playQuizFanfare();
 
         // Ring: r=54, circumference ≈ 339
         var circ   = 339;
         var offset = circ - (circ * pct / 100);
 
         var tier, title, message;
-        if (isPerfect)   { tier='perfect';    title='Perfect Score!';      message='Outstanding! You\'ve mastered this content completely.'; }
-        else if (pct>=80){ tier='excellent';  title='Excellent Work!';     message='Strong understanding. Review any gaps in the slides.'; }
-        else if (pct>=60){ tier='good';       title='Good Progress!';      message='You\'re on the right track. Revisit the slides to strengthen your knowledge.'; }
-        else             { tier='needs-work'; title='Keep Practicing!';    message='Review the slides and try again to improve your score.'; }
+        if (isPerfect) {
+            tier='perfect';    title='Perfect Score!';
+            message='Outstanding! You\'ve mastered this content completely.';
+        } else if (passed) {
+            tier='excellent';  title='Passed!';
+            message='You scored ' + pct + '%, above the ' + passMark + '% pass mark. Review any gaps in the slides.';
+        } else if (incorrect === 1) {
+            tier='needs-work'; title='So Close!';
+            message='You scored ' + pct + '%, just under the ' + passMark + '% pass mark. Retry the one question you missed.';
+        } else {
+            tier='needs-work'; title='Not Quite Yet';
+            message='You scored ' + pct + '%. You need ' + passMark + '% to pass — retry the ' + incorrect + ' questions you missed, or review the slides first.';
+        }
 
         var gradId = isPerfect ? 'peGradPerfect' : 'peGradScore';
         var gradStop = isPerfect
@@ -3744,10 +3948,19 @@ define('mod_productexplainer/player', [], function() {
         html += '<div class="pe-quiz-stat"><div class="pe-quiz-stat-val">' + total + '</div><div class="pe-quiz-stat-lbl">Questions</div></div>';
         html += '</div>';
 
+        html += '<p class="pe-quiz-passmark-note">Pass mark: <strong>' + passMark + '%</strong></p>';
+
         html += '<div class="pe-quiz-results-actions">';
-        html += '<button class="pe-quiz-retake-btn" id="pe-quiz-retake-btn">' + icon('zap') + 'Retake Quiz</button>';
+        // FEAT-QUIZ-RETRY-WRONG: primary action is to re-answer only the outstanding
+        // questions; a full retake is still available as a secondary option.
+        if (wrongIdx.length > 0) {
+            html += '<button class="pe-quiz-retry-wrong-btn" id="pe-quiz-retry-wrong-btn">' + icon('zap')
+                + 'Retry ' + wrongIdx.length + ' incorrect question' + (wrongIdx.length === 1 ? '' : 's') + '</button>';
+        }
+        html += '<button class="pe-quiz-retake-btn" id="pe-quiz-retake-btn">' + icon('zap') + 'Retake Whole Quiz</button>';
         html += '<button class="pe-quiz-back-btn" id="pe-quiz-back-btn">' + icon('chevL') + 'Back to Slides</button>';
-        if (cfg.enableCertificate) {
+        // Certificate is only offered once the student has actually passed.
+        if (cfg.enableCertificate && passed) {
             html += '<button class="pe-quiz-cert-btn" id="pe-quiz-cert-btn">' + icon('award') + 'View Certificate</button>';
         }
         html += '</div>';
@@ -3755,9 +3968,11 @@ define('mod_productexplainer/player', [], function() {
 
         overlay.innerHTML = html;
 
-        // Confetti for all passing scores (60%+)
+        // FEAT-PASS-MARK-WIRED: confetti only for a genuine pass. Previously this fired
+        // at a hardcoded 60%, so a student who failed a 100%-pass-mark quiz still got a
+        // celebration.
         var confWrap = document.getElementById('pe-quiz-confetti-wrap');
-        if (confWrap && pct >= 60) launchQuizConfetti(confWrap);
+        if (confWrap && passed) launchQuizConfetti(confWrap);
 
         // Animate ring fill + percent counter
         setTimeout(function() {
@@ -3783,7 +3998,11 @@ define('mod_productexplainer/player', [], function() {
         // Bind action buttons
         var retake = document.getElementById('pe-quiz-retake-btn');
         var back   = document.getElementById('pe-quiz-back-btn');
-        if (retake) retake.addEventListener('click', showQuiz);
+        // Wrapped, not passed directly: addEventListener would hand showQuiz the click
+        // event as its retryWrongOnly argument, which is truthy.
+        if (retake) retake.addEventListener('click', function() { showQuiz(false); });
+        var retryWrong = document.getElementById('pe-quiz-retry-wrong-btn');
+        if (retryWrong) retryWrong.addEventListener('click', function() { showQuiz(true); });
         if (back)   back.addEventListener('click', function() {
             stopQuizAudio();
             var o = document.getElementById('pe-quiz-overlay');
@@ -3800,6 +4019,10 @@ define('mod_productexplainer/player', [], function() {
 
     function showCertificate() {
         if (!cfg.enableCertificate || isBuilderPreviewMode) return;
+        // FEAT-PASS-MARK-WIRED: when the activity has a quiz, the certificate is only
+        // available to a student who has met the pass mark. Previously showCertificate()
+        // checked only enableCertificate, so a 0% score could still print a certificate.
+        if (quizQuestions.length > 0 && !quizPassed) return;
 
         // Re-show if already built
         var existing = document.getElementById('pe-cert-overlay');

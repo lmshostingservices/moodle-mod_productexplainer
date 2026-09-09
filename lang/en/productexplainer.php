@@ -64,6 +64,17 @@ $string['apikey_desc'] = 'Your AI Grader API Key.';
 
 $string['nocontentyet'] = 'No slides generated yet.';
 $string['editslides'] = 'Edit slides';
+
+$string['exportcontent'] = 'Download content';
+$string['exportcontentinfo'] = 'Downloads all generated slide text, narration scripts, AI image prompts and quiz questions, including the correct answers, so the content can be reused elsewhere. The download requires the manage capability.';
+$string['exporttxt'] = 'Plain text (.txt)';
+$string['exportmd'] = 'Markdown (.md)';
+$string['exportjson'] = 'JSON (.json)';
+$string['exportcourseheading'] = 'Download all AI Slide Flow content in this course';
+$string['exportcoursecombined'] = 'One combined file';
+$string['exportcoursezip'] = 'Zip, one file per activity';
+$string['exportnothing'] = 'There is no generated AI Slide Flow content in this course to download yet.';
+$string['viewreports'] = 'View reports';
 $string['previous'] = 'Previous';
 $string['next'] = 'Next';
 $string['slidecount'] = 'Slide {$a->current} of {$a->total}';
@@ -78,7 +89,7 @@ $string['completionquiz_help'] = 'When enabled, the activity is only marked comp
 $string['certificateheading'] = 'Completion certificate';
 $string['enablecertificate'] = 'Enable certificate';
 $string['enablecertificate_help'] = 'When enabled, students receive a beautiful landscape certificate of completion once they finish all slides (and pass the quiz if one is required). The certificate displays the site logo, accent colour, student name, and activity name.';
-$string['cpdpoints'] = 'CPD points';
+$string['cpdpoints'] = 'Continuing professional development (CPD) points';
 $string['cpdpoints_help'] = 'Number of Continuing Professional Development (CPD) points to display on the certificate. Set to 0 to hide the CPD points section.';
 $string['certificatepdf'] = 'Allow PDF download';
 $string['certificatepdf_help'] = "If enabled, students can download a PDF copy of their certificate using their browser's print-to-PDF feature.";

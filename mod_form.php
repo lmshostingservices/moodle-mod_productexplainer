@@ -201,7 +201,9 @@ class mod_productexplainer_mod_form extends moodleform_mod {
                         }
                     }
                 }
-            } catch (\Exception $e) { /* fall through */ }
+            } catch (\Exception $e) {
+                // Fall through to the next method.
+            }
         }
         // Method 4: Boost fallback.
         if ($defaultaccentcolor === '#3b82f6') {
