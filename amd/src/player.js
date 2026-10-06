@@ -55,6 +55,9 @@ define('mod_productexplainer/player', [], function() {
     var addImagePendingFile = null; // file chosen in the Add Image Slide form
     var audioElements = {};
     var isPlayingAudio = false;
+    var audioBlocked  = {};   // slideIndex -> true when the browser refused to autoplay it
+    var audioFailed   = {};   // slideIndex -> true when the audio file could not be loaded
+    var gestureUnlockBound = false;
     var listenedSlides = {};
     var videoWatched = {};          // tracks which must-watch video slides have been fully viewed
     var ytMsgListenerBound = false; // ensure YouTube postMessage listener is attached only once
@@ -1726,7 +1729,15 @@ define('mod_productexplainer/player', [], function() {
         if (instructionEl) {
             instructionEl.style.visibility = '';
             // Determine instruction message
-            if (cfg.requireVoiceover && !listenedSlides[idx]) {
+            if (audioFailed[idx]) {
+                instructionEl.className = 'pe-audio-instruction pe-audio-instruction--locked';
+                if (instructionTextEl) instructionTextEl.textContent = 'Narration unavailable';
+            } else if (audioBlocked[idx] && !listenedSlides[idx]) {
+                // The browser refused to start it on its own; say so rather than leaving
+                // the student looking at a silent slide.
+                instructionEl.className = 'pe-audio-instruction pe-audio-instruction--locked';
+                if (instructionTextEl) instructionTextEl.textContent = 'Press play to start narration';
+            } else if (cfg.requireVoiceover && !listenedSlides[idx]) {
                 instructionEl.className = 'pe-audio-instruction pe-audio-instruction--locked';
                 if (instructionTextEl) instructionTextEl.textContent = 'Listen to continue';
             } else {
@@ -2216,6 +2227,64 @@ define('mod_productexplainer/player', [], function() {
         }
     }
 
+    /**
+     * Unlock the "listen before advancing" gate for a slide.
+     *
+     * @param {number} slideIndex Slide the gate belongs to.
+     */
+    function unlockVoiceoverGate(slideIndex) {
+        if (listenedSlides[slideIndex]) return;
+        listenedSlides[slideIndex] = true;
+        if (!isBuilderPreviewMode && cfg.requireVoiceover && slideIndex === currentSlide) {
+            var nextBtnEl = document.getElementById('pe-next-btn');
+            if (nextBtnEl && currentSlide < totalSlides - 1) nextBtnEl.disabled = false;
+        }
+    }
+
+    /**
+     * Fetch (creating on first use) the Audio element for a slide.
+     *
+     * Playback state is driven by the element's own play/pause events rather than being
+     * assumed after calling play(), because play() is asynchronous and the browser can
+     * refuse it.
+     *
+     * @param  {number} slideIndex Slide index.
+     * @param  {object} slide      The slide from the manifest.
+     * @return {object} The Audio element.
+     */
+    function getSlideAudio(slideIndex, slide) {
+        if (audioElements[slideIndex]) return audioElements[slideIndex];
+
+        var audio = new Audio(slide.voiceoverUrl);
+        audioElements[slideIndex] = audio;
+
+        audio.addEventListener('play', function() {
+            isPlayingAudio = true;
+            audioBlocked[slideIndex] = false;
+            updateGlobalAudioBtn(slideIndex);
+        });
+        audio.addEventListener('pause', function() {
+            isPlayingAudio = false;
+            updateGlobalAudioBtn(slideIndex);
+        });
+        audio.addEventListener('error', function() {
+            // The narration file is missing or unplayable. Record it so the footer can
+            // say so, and release the gate — a broken file must never strand a student
+            // on a slide they cannot advance past.
+            audioFailed[slideIndex] = true;
+            isPlayingAudio = false;
+            unlockVoiceoverGate(slideIndex);
+            updateGlobalAudioBtn(slideIndex);
+        });
+        audio.addEventListener('ended', function() {
+            isPlayingAudio = false;
+            unlockVoiceoverGate(slideIndex);
+            updateGlobalAudioBtn(slideIndex);
+        });
+
+        return audio;
+    }
+
     function toggleAudio(slideIndex, slide) {
         if (!slide || !slide.voiceoverUrl) return;
 
@@ -2228,33 +2297,66 @@ define('mod_productexplainer/player', [], function() {
             }
         });
 
-        if (!audioElements[slideIndex]) {
-            audioElements[slideIndex] = new Audio(slide.voiceoverUrl);
-            audioElements[slideIndex].addEventListener('ended', function() {
-                isPlayingAudio = false;
-                // Gate unlock fires on ended — not on play start
-                if (!listenedSlides[slideIndex]) {
-                    listenedSlides[slideIndex] = true;
-                    if (!isBuilderPreviewMode && cfg.requireVoiceover && slideIndex === currentSlide) {
-                        var nextBtnEl = document.getElementById('pe-next-btn');
-                        if (nextBtnEl && currentSlide < totalSlides - 1) nextBtnEl.disabled = false;
-                    }
-                    updateGlobalAudioBtn(slideIndex);
-                }
-                updateGlobalAudioBtn(slideIndex);
-            });
-        }
-
-        var audio = audioElements[slideIndex];
+        var audio = getSlideAudio(slideIndex, slide);
 
         if (audio.paused) {
-            audio.play().catch(function() {});
-            isPlayingAudio = true;
+            // FIX-SLIDE1-AUTOPLAY: play() returns a promise, and browsers reject it when
+            // no user gesture has happened yet — which is always the case for the first
+            // slide on page load. The previous code swallowed that rejection with an
+            // empty catch and set isPlayingAudio = true regardless, so slide 1 sat
+            // silent while the footer button showed a pause icon, and (because the gate
+            // only opens on 'ended') "require voiceover" left Next disabled for good.
+            var playing = audio.play();
+            if (playing && typeof playing.catch === 'function') {
+                playing.catch(function(err) {
+                    isPlayingAudio = false;
+                    // AbortError just means a newer play/pause superseded this one.
+                    if (!err || err.name !== 'AbortError') {
+                        audioBlocked[slideIndex] = true;
+                        armGestureUnlock();
+                    }
+                    updateGlobalAudioBtn(slideIndex);
+                });
+            }
         } else {
             audio.pause();
-            isPlayingAudio = false;
         }
         updateGlobalAudioBtn(slideIndex);
+    }
+
+    /**
+     * After autoplay has been refused, start the current slide's narration on the first
+     * interaction anywhere in the player. That gesture satisfies the browser's autoplay
+     * policy, so the student gets their narration without having to hunt for the play
+     * button. Pressing the play button itself is left to toggleAudio.
+     */
+    function armGestureUnlock() {
+        if (gestureUnlockBound) return;
+        gestureUnlockBound = true;
+
+        var handler = function(e) {
+            document.removeEventListener('pointerdown', handler, true);
+            document.removeEventListener('keydown', handler, true);
+            gestureUnlockBound = false;
+
+            var t = e && e.target;
+            if (t && typeof t.closest === 'function' && t.closest('#pe-audio-btn')) {
+                return; // The student pressed play; toggleAudio handles that click.
+            }
+            if (!audioBlocked[currentSlide]) return;
+            var slide = manifest && manifest.slides && manifest.slides[currentSlide];
+            if (!slide || !slide.voiceoverUrl) return;
+            var audio = audioElements[currentSlide];
+            if (!audio || !audio.paused || audio.currentTime > 0) return;
+
+            var retry = audio.play();
+            if (retry && typeof retry.catch === 'function') {
+                retry.catch(function() {});
+            }
+        };
+
+        document.addEventListener('pointerdown', handler, true);
+        document.addEventListener('keydown', handler, true);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────

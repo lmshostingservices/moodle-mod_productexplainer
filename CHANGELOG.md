@@ -7,6 +7,28 @@ Versions correspond to `$plugin->release` in `version.php`.
 
 ---
 
+## [1.0.112] - 2026-10-06
+
+### Fixed
+
+- **Slide 1 narration never played.** `toggleAudio()` called `audio.play()`, discarded the
+  returned promise with an empty `catch`, and set `isPlayingAudio = true` regardless.
+  Browsers reject `play()` when no user gesture has happened yet, which is always true for
+  the first slide on page load — so slide 1 sat silent while every later slide, reached by
+  clicking Next, played normally. Playback state is now driven by the audio element's own
+  `play`/`pause` events instead of being assumed, and the rejection is handled.
+- **Students could be stranded on slide 1.** `requirevoiceover` defaults to on and the Next
+  button only unlocks when the narration fires `ended`. Combined with the bug above, a
+  student landing on slide 1 got no audio and a permanently disabled Next. Narration now
+  starts automatically on the student's first interaction anywhere in the player (that
+  gesture satisfies the browser's autoplay policy), and the footer says "Press play to
+  start narration" until it does.
+- **A missing narration file no longer traps a student.** The audio `error` event now
+  releases the listen-before-advancing gate and the footer shows "Narration unavailable",
+  rather than leaving Next disabled with no way forward.
+
+---
+
 ## [1.0.111] - 2026-10-06
 
 Documentation. No functional, schema or behavioural changes.
