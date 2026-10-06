@@ -7,6 +7,25 @@ Versions correspond to `$plugin->release` in `version.php`.
 
 ---
 
+## [1.0.113] - 2026-10-06
+
+### Fixed
+
+- **A slide could be left with narration that does not exist.** `generate_voiceover` in
+  `ajax.php` deleted the slide's existing audio, wrote whatever the narration service
+  returned, and reported success with a URL — without ever checking that a usable file had
+  been written. If the service returned truncated or non-base64 audio, the manifest
+  recorded a URL for a file the browser could not play, and the slide that previously
+  worked had already lost its old audio. The player showed a play button and
+  "Narration unavailable". Audio is now validated before anything is deleted, written
+  under a temporary name, verified on disk, and only then swapped into place; a failure
+  leaves the existing narration untouched and returns a real error.
+- **Failed narration is retried and reported.** The builder now retries a slide once
+  automatically, and if it still fails says which slide number failed and why, instead of
+  "check credits and try again".
+
+---
+
 ## [1.0.112] - 2026-10-06
 
 ### Fixed

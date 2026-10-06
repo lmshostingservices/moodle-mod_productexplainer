@@ -469,12 +469,34 @@ require_login();
             exit;
         }
 
-        $audioBytes = base64_decode($result['audioContent']);
+        // FIX-SILENT-EMPTY-NARRATION: this used to decode, delete the old file, write
+        // whatever came back and report success unconditionally. If the API returned
+        // audioContent that was not valid base64, or was truncated, the slide ended up
+        // with a URL recorded in the manifest pointing at a file the browser could not
+        // play ("Narration unavailable") — while the generator reported success. The
+        // old file was already deleted by then, so a slide that previously worked could
+        // be left broken. Validate first, write to a temporary name, verify, then swap.
+        $audioBytes = base64_decode($result['audioContent'], true);
+        if ($audioBytes === false || strlen($audioBytes) < 512) {
+            echo json_encode([
+                'success' => false,
+                'error'   => 'The narration service returned no usable audio for slide '
+                    . ($slideIndex + 1) . '. The existing narration has been left in place. '
+                    . 'Please try generating again.',
+            ]);
+            exit;
+        }
+
         $audioFilename = 'slide_' . $slideIndex . '.ogg';
+        $tempfilename  = 'slide_' . $slideIndex . '.new.ogg';
         $fs = get_file_storage();
 
-        $existing = $fs->get_file($context->id, 'mod_productexplainer', 'slidevoiceovers', $pe->id, '/', $audioFilename);
-        if ($existing) $existing->delete();
+        // Write the new audio under a temporary name first, so a failure cannot destroy
+        // narration that is already working.
+        $stale = $fs->get_file($context->id, 'mod_productexplainer', 'slidevoiceovers', $pe->id, '/', $tempfilename);
+        if ($stale) {
+            $stale->delete();
+        }
 
         $fileRecord = [
             'contextid' => $context->id,
@@ -482,15 +504,44 @@ require_login();
             'filearea'  => 'slidevoiceovers',
             'itemid'    => $pe->id,
             'filepath'  => '/',
-            'filename'  => $audioFilename,
+            'filename'  => $tempfilename,
         ];
-        $fs->create_file_from_string($fileRecord, $audioBytes);
+
+        try {
+            $written = $fs->create_file_from_string($fileRecord, $audioBytes);
+        } catch (Throwable $e) {
+            $written = null;
+        }
+
+        if (!$written || $written->get_filesize() < 512) {
+            if ($written) {
+                $written->delete();
+            }
+            echo json_encode([
+                'success' => false,
+                'error'   => 'Could not store the narration for slide ' . ($slideIndex + 1)
+                    . '. The existing narration has been left in place. Please try again.',
+            ]);
+            exit;
+        }
+
+        // The new file is good — now replace the old one and rename into place.
+        $existing = $fs->get_file($context->id, 'mod_productexplainer', 'slidevoiceovers', $pe->id, '/', $audioFilename);
+        if ($existing) {
+            $existing->delete();
+        }
+        $written->rename('/', $audioFilename);
 
         $audioUrl = moodle_url::make_pluginfile_url(
             $context->id, 'mod_productexplainer', 'slidevoiceovers', $pe->id, '/', $audioFilename
         );
 
-        echo json_encode(['success' => true, 'audioUrl' => $audioUrl->out(false), 'slideIndex' => $slideIndex]);
+        echo json_encode([
+            'success'    => true,
+            'audioUrl'   => $audioUrl->out(false),
+            'slideIndex' => $slideIndex,
+            'bytes'      => (int)$written->get_filesize(),
+        ]);
         exit;
     }
 

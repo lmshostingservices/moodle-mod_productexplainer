@@ -58,6 +58,7 @@ define('mod_productexplainer/player', [], function() {
     var audioBlocked  = {};   // slideIndex -> true when the browser refused to autoplay it
     var audioFailed   = {};   // slideIndex -> true when the audio file could not be loaded
     var gestureUnlockBound = false;
+    var lastVoiceoverError = '';
     var listenedSlides = {};
     var videoWatched = {};          // tracks which must-watch video slides have been fully viewed
     var ytMsgListenerBound = false; // ensure YouTube postMessage listener is attached only once
@@ -1438,6 +1439,8 @@ define('mod_productexplainer/player', [], function() {
 
         var idx = 0;
         var failCount = 0;
+        var failedSlides = [];
+        var retried = {};   // slideIndex -> true once this slide has already been retried
         // Use language selected in the concept builder form (if set), falling back to
         // the page-load cfg value (from the Moodle activity's saved settings).
         var voiceLang = conceptSelectedLanguage || cfg.voiceLanguage || 'en-AU';
@@ -1447,12 +1450,37 @@ define('mod_productexplainer/player', [], function() {
             if (idx >= slides.length) {
                 if (btn) btn.disabled = false;
                 if (failCount > 0) {
-                    if (statusEl) statusEl.textContent = (slides.length - failCount) + ' of ' + slides.length + ' voiceovers generated (' + failCount + ' failed — check credits and try again).';
+                    if (statusEl) {
+                        statusEl.textContent = (slides.length - failCount) + ' of ' + slides.length
+                            + ' voiceovers generated. Failed on slide'
+                            + (failedSlides.length === 1 ? ' ' : 's ') + failedSlides.join(', ')
+                            + '. Press Generate All Voiceovers again to retry.'
+                            + (lastVoiceoverError ? ' (' + lastVoiceoverError + ')' : '');
+                    }
                 } else {
                     if (statusEl) statusEl.textContent = 'All ' + slides.length + ' voiceovers generated!';
                 }
                 return;
             }
+            // FIX-NARRATION-RETRY: give a failed slide one automatic second attempt, and
+            // if it still fails, name the slide instead of leaving the teacher to discover
+            // a silent slide later.
+            function voiceoverFailed(reason) {
+                if (!retried[idx]) {
+                    retried[idx] = true;
+                    if (statusEl) {
+                        statusEl.textContent = 'Slide ' + (idx + 1) + ' narration failed - retrying...';
+                    }
+                    setTimeout(doNext, 1200);
+                    return;
+                }
+                failCount++;
+                failedSlides.push(idx + 1);
+                if (reason) lastVoiceoverError = reason;
+                idx++;
+                doNext();
+            }
+
             var slide = slides[idx];
             var voText = buildVoiceoverText(slide);
             if (statusEl) statusEl.textContent = 'Generating voiceover ' + (idx + 1) + ' of ' + slides.length + '...';
@@ -1469,15 +1497,13 @@ define('mod_productexplainer/player', [], function() {
             }), function(data) {
                 if (data && data.success && data.audioUrl) {
                     slides[idx].voiceoverUrl = data.audioUrl;
-                } else {
-                    failCount++;
+                    idx++;
+                    doNext();
+                    return;
                 }
-                idx++;
-                doNext();
-            }, function() {
-                failCount++;
-                idx++;
-                doNext();
+                voiceoverFailed(data && data.error ? data.error : '');
+            }, function(err) {
+                voiceoverFailed(err || '');
             });
         }
         doNext();
