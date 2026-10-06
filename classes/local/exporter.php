@@ -15,6 +15,7 @@
 // along with Moodle.  If not, see <http://www.gnu.org/licenses/>.
 
 namespace mod_productexplainer\local;
+require_once(__DIR__ . '/narration.php');
 
 /**
  * Renders the generated slide and quiz content of an activity as downloadable text.
@@ -36,6 +37,10 @@ class exporter {
     const SKIP_KEYS = [
         'type', 'slideType', 'title', 'content', 'voiceoverText', 'imagePrompt',
         'imageUrl', 'noImage', 'isCustom', 'icon',
+        'narrationMode', 'narrationOverride', 'narrationScript', 'generatedNarrationText',
+        'narrationRequested', 'narrationOmitted', 'voiceoverUrl',
+        'narrationBaselineText',
+        'narrationGenerationFailed', 'generatedNarrationVoice', 'generatedNarrationLanguage',
     ];
 
     /** @var string[] Presentation-only keys stripped at any depth — they carry no content. */
@@ -203,7 +208,7 @@ class exporter {
                 'title'       => (string)($slide['title'] ?? ''),
                 'content'     => $this->clean_value($slide['content'] ?? []),
                 'extra'       => $this->clean_value($this->extra_fields($slide)),
-                'narration'   => (string)($slide['voiceoverText'] ?? ''),
+                'narration'   => narration::resolve($slide),
                 'imagePrompt' => (string)($slide['imagePrompt'] ?? ''),
                 'imageUrl'    => (string)($slide['imageUrl'] ?? ''),
             ];
@@ -399,7 +404,7 @@ class exporter {
             }
             $lines = array_merge($lines, $body);
 
-            $narration = trim((string)($slide['voiceoverText'] ?? ''));
+            $narration = narration::resolve($slide);
             if ($narration !== '') {
                 $lines[] = '';
                 $lines[] = $md ? '**Narration script**' : 'NARRATION SCRIPT';

@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.0.114] - 2026-10-06
+
+### Fixed
+
+- Start presentation explicitly unlocks first-slide audio in autoplay-restricted browsers. Navigation starts playback rather than toggling it; failures expose retry and preserve independent video and quiz gates.
+- Publishing and authoring are locked during narration generation. Failed or uncertain generation is not automatically retried or charged again.
+- Narration uses complete ordered slide text or an explicit teacher override; content exports use the same script. Changed narration is marked stale, with explicit omission available.
+- Existing recordings remain intact. New audio files are immutable and validated against their declared Ogg, MP3 or WAV format before storage.
+- Quiz narration failures offer Retry or Continue without narration instead of silently skipping speech. Speculative paid narration requests are removed.
+
+Existing recordings without generation metadata remain usable. This release does not change credit prices.
+
 All notable changes to **AI Slide Flow** (`mod_productexplainer`) are documented here.
 
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).

@@ -1,7 +1,7 @@
 // AMD module for mod_productexplainer
 // MUST remain in AMD define() format for Moodle 4.x compatibility.
 /* jshint ignore:start */
-define('mod_productexplainer/player', [], function() {
+define('mod_productexplainer/player', ['mod_productexplainer/narration'], function(narration) {
     'use strict';
 
     // ── Inline SVG icons ────────────────────────────────────────────────────────
@@ -57,7 +57,6 @@ define('mod_productexplainer/player', [], function() {
     var isPlayingAudio = false;
     var audioBlocked  = {};   // slideIndex -> true when the browser refused to autoplay it
     var audioFailed   = {};   // slideIndex -> true when the audio file could not be loaded
-    var gestureUnlockBound = false;
     var lastVoiceoverError = '';
     var listenedSlides = {};
     var videoWatched = {};          // tracks which must-watch video slides have been fully viewed
@@ -75,6 +74,40 @@ define('mod_productexplainer/player', [], function() {
     var conceptUploadedDocName = '';
     var conceptSelectedLanguage = '';  // set on renderConceptBuilder, used for generate & voiceover
     var selectedVoiceStyle = '';       // chosen in voiceover panel; falls back to cfg.voiceStyle || 'Zephyr'
+    var generationRunning = false;
+    var presentationStarted = false;
+    var playerGlobalListeners = [];
+    function bindPlayerGlobal(target, name, handler) {
+        target.addEventListener(name, handler);
+        playerGlobalListeners.push(function() { target.removeEventListener(name, handler); });
+    }
+    function refreshAdvanceControls() {
+        var allowed = canAdvanceFromSlide(currentSlide, manifest.slides);
+        var next = document.getElementById('pe-next-btn');
+        if (next) next.disabled = !allowed || (currentSlide === totalSlides - 1 && !quizQuestions.length);
+        ['pe-quiz-cta-btn', 'pe-cert-footer-btn'].forEach(function(id) {
+            var el = document.getElementById(id);
+            if (el) el.disabled = !allowed;
+        });
+    }
+    var disabledAuthoring = [];
+    function setGenerationRunning(value) {
+        var wasRunning = generationRunning;
+        generationRunning = value;
+        if (value) {
+            if (!wasRunning) disabledAuthoring = [];
+            var root = builderApp || document.getElementById('pe-app');
+            if (root) root.querySelectorAll('button,input,select,textarea').forEach(function(el) {
+                if (!el.disabled) { disabledAuthoring.push(el); el.disabled = true; }
+            });
+        } else {
+            disabledAuthoring.forEach(function(el) { el.disabled = false; });
+            disabledAuthoring = [];
+        }
+    }
+    window.addEventListener('beforeunload', function(e) {
+        if (generationRunning) { e.preventDefault(); e.returnValue = ''; }
+    });
 
     // ── Quiz state ───────────────────────────────────────────────────────────
     var quizQuestions  = [];   // from manifest.quizQuestions
@@ -96,10 +129,9 @@ define('mod_productexplainer/player', [], function() {
     var quizAudioCtx   = null;
     var quizCurrentAudio = null; // currently-playing Chirp HD quiz audio element
     var quizTtsGenId     = 0;   // incremented on each speakQuizText call; stale AJAX responses are discarded
-    var prefetchQuizAudio = null;   // {text, audio, url} — feedback TTS pre-fetched while user decides
-    var prefetchQuizGenId = 0;
-    var prefetchQuizPending = false; // true while a prefetch AJAX call is still in-flight
-    var prefetchAudioMap = {};      // multi-slot pre-warm cache: text → {audio, url}
+    var quizPlaybackTimer = null;
+    var quizStartTimer = null;
+    var quizAudioUrl = null;
 
     // ── Attempt tracking (rich analytics for teacher reporting) ───────────────
     var attemptStartTime  = 0;    // ms timestamp when player initialised
@@ -127,9 +159,26 @@ define('mod_productexplainer/player', [], function() {
         if (cfg.manifest) {
             try { manifest = JSON.parse(decodeURIComponent(cfg.manifest)); } catch (e) { manifest = null; }
         }
+        if (manifest && Array.isArray(manifest.slides)) {
+            manifest.slides.forEach(function(slide) {
+                if (slide.voiceoverUrl && typeof slide.generatedNarrationText !== 'string'
+                        && typeof slide.narrationBaselineText !== 'string') {
+                    // Unknown legacy recording source: grandfather unchanged activities,
+                    // but detect deliberate edits from this point without claiming an exact source.
+                    slide.narrationBaselineText = narration.resolve(slide);
+                }
+            });
+        }
 
         var app = document.getElementById('pe-app');
         if (!app) return;
+        ['click', 'input', 'change', 'keydown', 'drop'].forEach(function(name) {
+            app.addEventListener(name, function(e) {
+                if (cfg.builderMode && generationRunning) {
+                    e.preventDefault(); e.stopImmediatePropagation();
+                }
+            }, true);
+        });
 
         // Hide the spinner placeholder.
         var loadingEl = document.getElementById('pe-loading');
@@ -786,6 +835,7 @@ define('mod_productexplainer/player', [], function() {
     }
 
     function handleGenerate() {
+        if (generationRunning) return;
         var productName = (document.getElementById('pe-product-name') || {}).value || '';
         productName = productName.trim();
         if (!productName) {
@@ -797,6 +847,7 @@ define('mod_productexplainer/player', [], function() {
         var docContent = uploadedDocContent || pasteContent.trim();
 
         var btn = document.getElementById('pe-generate-btn');
+        setGenerationRunning(true);
         if (btn) { btn.disabled = true; btn.innerHTML = spinner() + 'Generating slides...'; }
         showStatus('pe-generate-status', 'Generating ' + selectedSlideCount + ' product training slides (this may take up to 30 seconds)...', 'info');
 
@@ -816,15 +867,18 @@ define('mod_productexplainer/player', [], function() {
                 showBuilderSlides();
                 generateConceptImages();
             } else {
+                setGenerationRunning(false);
                 showStatus('pe-generate-status', 'Generation failed: ' + escHtml(data && data.error ? data.error : 'Unknown error'), 'error');
             }
         }, function(err) {
             if (btn) { btn.disabled = false; btn.innerHTML = genBtnLabel(selectedSlideCount); }
+            setGenerationRunning(false);
             showStatus('pe-generate-status', 'Request failed: ' + escHtml(err), 'error');
         });
     }
 
     function handleGenerateConcept() {
+        if (generationRunning) return;
         var conceptName = ((document.getElementById('pe-concept-name') || {}).value || '').trim();
         var conceptContext = ((document.getElementById('pe-concept-context') || {}).value || '').trim();
         var learnerRole = ((document.getElementById('pe-concept-role') || {}).value || '').trim();
@@ -839,6 +893,7 @@ define('mod_productexplainer/player', [], function() {
         var ownContent = conceptUploadedDocContent || pasteContent;
 
         var btn = document.getElementById('pe-concept-generate-btn');
+        setGenerationRunning(true);
         if (btn) { btn.disabled = true; btn.innerHTML = spinner() + 'Generating concept slides...'; }
         showStatus('pe-concept-generate-status', 'Generating 7 concept slides (this may take up to 30 seconds)...', 'info');
 
@@ -862,12 +917,14 @@ define('mod_productexplainer/player', [], function() {
                 var qWarn = reconcileQuizCount(manifest, selectedQuizCount);
                 showStatus('pe-concept-generate-status', 'Slides generated! Generating AI images for each slide...' + qWarn, 'success');
                 showBuilderSlides();
-                setTimeout(generateConceptImages, 400);
+                generateConceptImages();
             } else {
+                setGenerationRunning(false);
                 showStatus('pe-concept-generate-status', 'Generation failed: ' + escHtml(data && data.error ? data.error : 'Unknown error'), 'error');
             }
         }, function(err) {
             if (btn) { btn.disabled = false; btn.innerHTML = icon('sparkles') + 'Generate Concept Explainer <span class="pe-credit-badge">10 credits + images</span>'; }
+            setGenerationRunning(false);
             showStatus('pe-concept-generate-status', 'Request failed: ' + escHtml(err), 'error');
         });
     }
@@ -915,6 +972,7 @@ define('mod_productexplainer/player', [], function() {
 
         function doNext() {
             if (idx >= total) {
+                setGenerationRunning(false);
                 if (progressEl) {
                     progressEl.innerHTML = '<div class="pe-status-msg pe-status-success">All ' + total + ' AI images generated!</div>';
                     setTimeout(function() { if (progressEl) progressEl.style.display = 'none'; }, 4000);
@@ -979,6 +1037,9 @@ define('mod_productexplainer/player', [], function() {
             html += '<div class="pe-narration-slide-item">';
             html += '<p class="pe-narration-slide-label">Slide ' + (i + 1) + ' &bull; ' + escHtml(slide.title || '') + '</p>';
             html += '<textarea class="pe-narration-ta" data-narration-idx="' + i + '" rows="4">' + escHtml(text) + '</textarea>';
+            html += '<p role="status" id="pe-narration-state-' + i + '">' + (narration.incomplete(slide) ? 'Requested narration is missing, failed or out of date. Regenerate or explicitly omit narration before publishing.' : '') + '</p>';
+            html += '<button type="button" class="pe-btn pe-btn-secondary pe-btn-sm" data-narration-auto="' + i + '">Use slide text</button> ';
+            html += '<label><input type="checkbox" data-narration-omit="' + i + '"' + (slide.narrationOmitted ? ' checked' : '') + '> Omit narration from this slide (old recording retained, not played)</label>';
             html += '</div>';
         }
         html += '</div>';
@@ -1007,11 +1068,34 @@ define('mod_productexplainer/player', [], function() {
                 ta.addEventListener('input', function() {
                     var idx = parseInt(ta.getAttribute('data-narration-idx'), 10);
                     if (!isNaN(idx) && manifest && manifest.slides && manifest.slides[idx]) {
-                        manifest.slides[idx].voiceoverText = ta.value;
+                        if (generationRunning) return;
+                        manifest.slides[idx].narrationMode = 'override';
+                        manifest.slides[idx].narrationOverride = ta.value;
+                        refreshNarrationState(idx);
                     }
                 });
             })(textareas[i]);
         }
+        narrationEl.querySelectorAll('[data-narration-auto]').forEach(function(btn) {
+            btn.addEventListener('click', function() {
+                if (generationRunning) return;
+                var idx = Number(btn.getAttribute('data-narration-auto'));
+                manifest.slides[idx].narrationMode = 'auto';
+                narrationEl.querySelector('[data-narration-idx="' + idx + '"]').value = buildVoiceoverText(manifest.slides[idx]);
+                refreshNarrationState(idx);
+            });
+        });
+        narrationEl.querySelectorAll('[data-narration-omit]').forEach(function(cb) {
+            cb.addEventListener('change', function() {
+                if (generationRunning) return;
+                manifest.slides[Number(cb.getAttribute('data-narration-omit'))].narrationOmitted = cb.checked;
+            });
+        });
+    }
+    function refreshNarrationState(idx) {
+        var el = document.getElementById('pe-narration-state-' + idx);
+        if (el) el.textContent = narration.incomplete(manifest.slides[idx])
+            ? 'Requested narration is missing, failed or out of date. Regenerate or explicitly omit narration before publishing.' : '';
     }
 
     // ── Quiz editor (builder view) ────────────────────────────────────────────
@@ -1427,10 +1511,15 @@ define('mod_productexplainer/player', [], function() {
             quizEditorEl.innerHTML = renderQuizEditorHTML();
             bindQuizEditorEvents();
         }
+        if (generationRunning) setGenerationRunning(true);
     }
 
     function handleGenerateAllVoiceovers() {
-        if (!manifest || !manifest.slides) return;
+        if (generationRunning || !manifest || !manifest.slides) return;
+        if (manifest.slides.some(function(slide) { return slide.narrationGenerationFailed; })
+                && !window.confirm('Retrying failed narration may charge credits again if the service completed an uncertain request. Completed, unchanged recordings will not be regenerated. Continue?')) return;
+        setGenerationRunning(true);
+        lastVoiceoverError = '';
         var btn = document.getElementById('pe-vo-btn');
         var statusEl = document.getElementById('pe-vo-status');
         var slides = manifest.slides;
@@ -1440,7 +1529,6 @@ define('mod_productexplainer/player', [], function() {
         var idx = 0;
         var failCount = 0;
         var failedSlides = [];
-        var retried = {};   // slideIndex -> true once this slide has already been retried
         // Use language selected in the concept builder form (if set), falling back to
         // the page-load cfg value (from the Moodle activity's saved settings).
         var voiceLang = conceptSelectedLanguage || cfg.voiceLanguage || 'en-AU';
@@ -1448,13 +1536,14 @@ define('mod_productexplainer/player', [], function() {
 
         function doNext() {
             if (idx >= slides.length) {
+                setGenerationRunning(false);
                 if (btn) btn.disabled = false;
                 if (failCount > 0) {
                     if (statusEl) {
                         statusEl.textContent = (slides.length - failCount) + ' of ' + slides.length
                             + ' voiceovers generated. Failed on slide'
                             + (failedSlides.length === 1 ? ' ' : 's ') + failedSlides.join(', ')
-                            + '. Press Generate All Voiceovers again to retry.'
+                            + '. Existing recordings are retained. Retry is manual and may charge credits again if the service completed an uncertain request.'
                             + (lastVoiceoverError ? ' (' + lastVoiceoverError + ')' : '');
                     }
                 } else {
@@ -1462,18 +1551,11 @@ define('mod_productexplainer/player', [], function() {
                 }
                 return;
             }
-            // FIX-NARRATION-RETRY: give a failed slide one automatic second attempt, and
-            // if it still fails, name the slide instead of leaving the teacher to discover
-            // a silent slide later.
+            // Never automatically repeat a possibly charged request. Keep any old link,
+            // name the failed slide, and require a deliberate, warned manual retry.
             function voiceoverFailed(reason) {
-                if (!retried[idx]) {
-                    retried[idx] = true;
-                    if (statusEl) {
-                        statusEl.textContent = 'Slide ' + (idx + 1) + ' narration failed - retrying...';
-                    }
-                    setTimeout(doNext, 1200);
-                    return;
-                }
+                slides[idx].narrationGenerationFailed = true;
+                refreshNarrationState(idx);
                 failCount++;
                 failedSlides.push(idx + 1);
                 if (reason) lastVoiceoverError = reason;
@@ -1483,6 +1565,12 @@ define('mod_productexplainer/player', [], function() {
 
             var slide = slides[idx];
             var voText = buildVoiceoverText(slide);
+            if (slide.narrationOmitted || (slide.voiceoverUrl && typeof slide.generatedNarrationText === 'string'
+                    && !narration.stale(slide) && !slide.narrationGenerationFailed
+                    && slide.generatedNarrationVoice === manifest.voiceStyle
+                    && slide.generatedNarrationLanguage === voiceLang)) { idx++; doNext(); return; }
+            slide.narrationRequested = true;
+            if (!voText) { voiceoverFailed('Narration script is empty.'); return; }
             if (statusEl) statusEl.textContent = 'Generating voiceover ' + (idx + 1) + ' of ' + slides.length + '...';
 
             ajaxPost(cfg.ajaxUrl, {
@@ -1497,6 +1585,12 @@ define('mod_productexplainer/player', [], function() {
             }), function(data) {
                 if (data && data.success && data.audioUrl) {
                     slides[idx].voiceoverUrl = data.audioUrl;
+                    slides[idx].generatedNarrationText = voText;
+                    slides[idx].generatedNarrationVoice = manifest.voiceStyle;
+                    slides[idx].generatedNarrationLanguage = voiceLang;
+                    slides[idx].narrationGenerationFailed = false;
+                    slides[idx].narrationScript = voText;
+                    refreshNarrationState(idx);
                     idx++;
                     doNext();
                     return;
@@ -1510,11 +1604,18 @@ define('mod_productexplainer/player', [], function() {
     }
 
     function handleSave() {
+        if (generationRunning) return;
         var saveStatusId = (selectedMode === 'concept') ? 'pe-concept-generate-status' : 'pe-generate-status';
         if (!manifest || !manifest.slides) {
             showStatus(saveStatusId, 'Nothing to save — generate slides first.', 'error');
             return;
         }
+        if (manifest.slides.some(narration.incomplete)) {
+            showStatus(saveStatusId, 'Narration is incomplete or out of date. Regenerate it or explicitly select Omit narration for the affected slides.', 'error');
+            return;
+        }
+        manifest.slides.forEach(function(slide) { slide.narrationScript = buildVoiceoverText(slide); });
+        setGenerationRunning(true);
         var saveBtn = document.getElementById('pe-save-btn');
         if (saveBtn) { saveBtn.disabled = true; saveBtn.innerHTML = spinner() + 'Saving...'; }
 
@@ -1530,10 +1631,12 @@ define('mod_productexplainer/player', [], function() {
                     // Reload page in player mode.
                     window.location.href = window.location.pathname + '?id=' + cfg.cmid;
                 } else {
+                    setGenerationRunning(false);
                     if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = icon('save') + 'Save &amp; Publish Slides'; }
                     showStatus(saveStatusId, 'Save failed: ' + escHtml(data && data.error ? data.error : 'Unknown'), 'error');
                 }
             }, function(err) {
+                setGenerationRunning(false);
                 if (saveBtn) { saveBtn.disabled = false; saveBtn.innerHTML = icon('save') + 'Save &amp; Publish Slides'; }
                 showStatus(saveStatusId, 'Save failed: ' + escHtml(err), 'error');
             });
@@ -1590,6 +1693,18 @@ define('mod_productexplainer/player', [], function() {
     }
 
     function renderPlayerHTML(container, isBuilderPreview) {
+        Object.keys(audioElements).forEach(function(k) {
+            var audio = audioElements[k];
+            clearTimeout(audio._peTimer);
+            audio.onplay = audio.onplaying = audio.onwaiting = audio.onpause = audio.onerror = audio.onended = null;
+            audio.pause();
+            audio.removeAttribute('src');
+            audio.load();
+        });
+        audioElements = {};
+        audioBlocked = {};
+        audioFailed = {};
+        isPlayingAudio = false;
         var slides = manifest.slides;
         currentSlide = 0;
         listenedSlides = {};
@@ -1635,7 +1750,12 @@ define('mod_productexplainer/player', [], function() {
         }
 
         // Footer: progress bar + dots (left) + instruction (center) + audio btn + counter (right)
-        var hasAnyVoiceover = !isBuilderPreview && cfg.enableVoiceover && slides.some(function(s) { return s && s.voiceoverUrl; });
+        var hasAnyVoiceover = !isBuilderPreview && cfg.enableVoiceover && slides.some(function(s) { return s && s.voiceoverUrl && !s.narrationOmitted; });
+        presentationStarted = !hasAnyVoiceover;
+        if (hasAnyVoiceover) {
+            html += '<div class="pe-start-presentation" id="pe-start-presentation"><p>Start the presentation to hear the slide narration.</p>'
+                + '<button type="button" class="pe-btn pe-btn-primary" id="pe-start-btn">Start presentation</button></div>';
+        }
         html += '<div class="pe-player-footer">';
         html += '<div class="pe-progress-track"><div class="pe-progress-fill" id="pe-progress-fill" style="width:' + Math.round((1 / slides.length) * 100) + '%"></div></div>';
         html += '<div class="pe-footer-bar">';
@@ -1681,6 +1801,13 @@ define('mod_productexplainer/player', [], function() {
 
         showSlide(currentSlide, slides.length, false);
         bindPlayerEvents(slides, isBuilderPreview);
+        var startBtn = document.getElementById('pe-start-btn');
+        if (startBtn) startBtn.addEventListener('click', function() {
+            presentationStarted = true;
+            document.getElementById('pe-start-presentation').remove();
+            startAudio(currentSlide, slides[currentSlide]);
+            refreshAdvanceControls();
+        });
 
         // Attach YouTube IFrame API postMessage listener (once per AMD module load)
         // to detect when a must-watch video has fully played so the Next button unlocks.
@@ -1703,8 +1830,9 @@ define('mod_productexplainer/player', [], function() {
                             videoWatched[si] = true;
                             if (si === currentSlide) {
                                 var nxBtn = document.getElementById('pe-next-btn');
-                                if (nxBtn) nxBtn.disabled = false;
+                                if (nxBtn) nxBtn.disabled = !canAdvanceFromSlide(si, mslides);
                                 refreshMustWatchBanner(si);
+                                refreshAdvanceControls();
                             }
                             break;
                         }
@@ -1727,19 +1855,21 @@ define('mod_productexplainer/player', [], function() {
     }
 
     function canAdvanceFromSlide(idx, slides) {
+        if (!presentationStarted && !isBuilderPreviewMode) return false;
         if (isBuilderPreviewMode) return true;
         var slide = slides && slides[idx];
         // Must-watch video gate (independent of voiceover setting)
         if (slide && slide.mustWatchVideo && slide.type === 'pe-video-slide' && !videoWatched[idx]) return false;
         if (!cfg.requireVoiceover) return true;
-        if (!slide || !slide.voiceoverUrl) return true; // no voiceover = freely advance
+        if (!slide || !slide.voiceoverUrl || slide.narrationOmitted || !cfg.enableVoiceover) return true;
         return !!listenedSlides[idx];
     }
 
     // Updates the global footer audio button and instruction text for the given slide.
     function updateGlobalAudioBtn(idx) {
+        if (idx !== currentSlide) return;
         var slide = manifest && manifest.slides && manifest.slides[idx];
-        var hasVoiceover = !isBuilderPreviewMode && cfg.enableVoiceover && slide && slide.voiceoverUrl;
+        var hasVoiceover = !isBuilderPreviewMode && cfg.enableVoiceover && slide && slide.voiceoverUrl && !slide.narrationOmitted;
 
         var audioBtnEl = document.getElementById('pe-audio-btn');
         var instructionEl = document.getElementById('pe-audio-instruction');
@@ -1757,7 +1887,7 @@ define('mod_productexplainer/player', [], function() {
             // Determine instruction message
             if (audioFailed[idx]) {
                 instructionEl.className = 'pe-audio-instruction pe-audio-instruction--locked';
-                if (instructionTextEl) instructionTextEl.textContent = 'Narration unavailable';
+                if (instructionTextEl) instructionTextEl.textContent = 'Narration unavailable. Press play to retry; you may continue without this recording.';
             } else if (audioBlocked[idx] && !listenedSlides[idx]) {
                 // The browser refused to start it on its own; say so rather than leaving
                 // the student looking at a silent slide.
@@ -1785,6 +1915,8 @@ define('mod_productexplainer/player', [], function() {
     }
 
     function bindPlayerEvents(slides, isBuilderPreview) {
+        playerGlobalListeners.forEach(function(remove) { remove(); });
+        playerGlobalListeners = [];
         var prevBtn = document.getElementById('pe-prev-btn');
         var nextBtn = document.getElementById('pe-next-btn');
 
@@ -1829,7 +1961,8 @@ define('mod_productexplainer/player', [], function() {
         }
 
         // Keyboard navigation
-        document.addEventListener('keydown', function(e) {
+        bindPlayerGlobal(document, 'keydown', function(e) {
+            if (generationRunning || !presentationStarted) return;
             var tag = document.activeElement ? document.activeElement.tagName : '';
             if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return;
             if (document.activeElement && document.activeElement.isContentEditable) return;
@@ -1917,7 +2050,7 @@ define('mod_productexplainer/player', [], function() {
                 }
             });
             ['fullscreenchange', 'webkitfullscreenchange'].forEach(function(evt) {
-                document.addEventListener(evt, function() {
+                bindPlayerGlobal(document, evt, function() {
                     var isFs = !!(document.fullscreenElement || document.webkitFullscreenElement);
                     var expand = document.querySelector('.pe-fs-expand');
                     var compress = document.querySelector('.pe-fs-compress');
@@ -2040,6 +2173,7 @@ define('mod_productexplainer/player', [], function() {
                         var imgCont = document.getElementById('pe-slide-img-' + slideIdx);
                         if (!imgCont) return;
                         btn.disabled = true;
+                        setGenerationRunning(true);
                         btn.innerHTML = spinner() + ' Generating…';
                         imgCont.innerHTML = '<div class="pe-slide-no-image pe-slide-regen-loading">' + spinner() + '<span>Generating new image…</span></div>';
                         ajaxPost(cfg.ajaxUrl, {
@@ -2047,6 +2181,7 @@ define('mod_productexplainer/player', [], function() {
                             sesskey: cfg.sesskey,
                             cmid: cfg.cmid
                         }, JSON.stringify({ slideIndex: slideIdx, imagePrompt: regenPrompt }), function(data) {
+                            setGenerationRunning(false);
                             if (data && data.success && data.imageUrl) {
                                 manifest.slides[slideIdx].imageUrl = data.imageUrl;
                                 imgCont.innerHTML = buildImageColInner(slideIdx, data.imageUrl);
@@ -2056,6 +2191,7 @@ define('mod_productexplainer/player', [], function() {
                                     + buildRegenOverlay(slideIdx);
                             }
                         }, function(err) {
+                            setGenerationRunning(false);
                             imgCont.innerHTML = '<div class="pe-slide-no-image">' + icon('image') + '<span style="color:#ef4444;font-size:0.75rem;">Failed: ' + escHtml(err) + '</span></div>'
                                 + buildRegenOverlay(slideIdx);
                         });
@@ -2090,7 +2226,11 @@ define('mod_productexplainer/player', [], function() {
                 audioBtn.addEventListener('click', function() {
                     var slide = slides[currentSlide];
                     if (slide && slide.voiceoverUrl) {
+                        presentationStarted = true;
+                        var gate = document.getElementById('pe-start-presentation');
+                        if (gate) gate.remove();
                         toggleAudio(currentSlide, slide);
+                        refreshAdvanceControls();
                     }
                 });
             }
@@ -2131,7 +2271,7 @@ define('mod_productexplainer/player', [], function() {
                 nextDisabled = true;
             }
             // Voiceover gate
-            if (!nextDisabled && cfg.requireVoiceover && slideData && slideData.voiceoverUrl && !listenedSlides[idx]) {
+            if (!nextDisabled && cfg.enableVoiceover && cfg.requireVoiceover && slideData && slideData.voiceoverUrl && !slideData.narrationOmitted && !listenedSlides[idx]) {
                 nextDisabled = true;
             }
         }
@@ -2157,7 +2297,7 @@ define('mod_productexplainer/player', [], function() {
                     try { ytf.contentWindow.postMessage('{"event":"listening","id":"1"}', 'https://www.youtube-nocookie.com'); } catch (_) {}
                 }
                 ytSubscribe();
-                ytf.addEventListener('load', ytSubscribe);
+                ytf.onload = ytSubscribe;
             })();
         }
 
@@ -2173,7 +2313,7 @@ define('mod_productexplainer/player', [], function() {
         }
 
         // Stop any playing audio when navigating slides
-        if (isPlayingAudio) {
+        if (Object.keys(audioElements).length) {
             Object.keys(audioElements).forEach(function(k) {
                 if (audioElements[k]) {
                     audioElements[k].pause();
@@ -2187,14 +2327,10 @@ define('mod_productexplainer/player', [], function() {
         updateGlobalAudioBtn(idx);
 
         // Auto-play voiceover for this slide (browser autoplay policy may silently block on page load)
-        if (!isBuilderPreviewMode && cfg.enableVoiceover) {
+        if (!isBuilderPreviewMode && cfg.enableVoiceover && presentationStarted) {
             var autoSlide = manifest && manifest.slides && manifest.slides[idx];
             if (autoSlide && autoSlide.voiceoverUrl) {
-                setTimeout(function() {
-                    if (currentSlide === idx) {
-                        toggleAudio(idx, autoSlide);
-                    }
-                }, 100);
+                startAudio(idx, autoSlide);
             }
         }
 
@@ -2218,6 +2354,7 @@ define('mod_productexplainer/player', [], function() {
         if (isBuilderPreviewMode) {
             updateVideoBuilderBar();
         }
+        refreshAdvanceControls();
     }
 
     function handleSlideImageUpload(slideIndex, file) {
@@ -2263,8 +2400,9 @@ define('mod_productexplainer/player', [], function() {
         listenedSlides[slideIndex] = true;
         if (!isBuilderPreviewMode && cfg.requireVoiceover && slideIndex === currentSlide) {
             var nextBtnEl = document.getElementById('pe-next-btn');
-            if (nextBtnEl && currentSlide < totalSlides - 1) nextBtnEl.disabled = false;
+            if (nextBtnEl && currentSlide < totalSlides - 1) nextBtnEl.disabled = !canAdvanceFromSlide(slideIndex, manifest.slides);
         }
+        refreshAdvanceControls();
     }
 
     /**
@@ -2284,16 +2422,29 @@ define('mod_productexplainer/player', [], function() {
         var audio = new Audio(slide.voiceoverUrl);
         audioElements[slideIndex] = audio;
 
-        audio.addEventListener('play', function() {
+        audio.onplay = function() {
+            if (slideIndex !== currentSlide) { audio.pause(); return; }
             isPlayingAudio = true;
             audioBlocked[slideIndex] = false;
             updateGlobalAudioBtn(slideIndex);
-        });
-        audio.addEventListener('pause', function() {
+        };
+        audio.onplaying = function() { clearTimeout(audio._peTimer); };
+        audio.onwaiting = function() {
+            clearTimeout(audio._peTimer);
+            audio._peTimer = setTimeout(function() {
+                if (slideIndex === currentSlide) audio.onerror();
+            }, 20000);
+        };
+        audio.onpause = function() {
+            audio._peRequest = (audio._peRequest || 0) + 1;
+            clearTimeout(audio._peTimer);
+            if (slideIndex !== currentSlide) return;
             isPlayingAudio = false;
             updateGlobalAudioBtn(slideIndex);
-        });
-        audio.addEventListener('error', function() {
+        };
+        audio.onerror = function() {
+            clearTimeout(audio._peTimer);
+            audio.pause();
             // The narration file is missing or unplayable. Record it so the footer can
             // say so, and release the gate — a broken file must never strand a student
             // on a slide they cannot advance past.
@@ -2301,18 +2452,24 @@ define('mod_productexplainer/player', [], function() {
             isPlayingAudio = false;
             unlockVoiceoverGate(slideIndex);
             updateGlobalAudioBtn(slideIndex);
-        });
-        audio.addEventListener('ended', function() {
+        };
+        audio.onended = function() {
+            clearTimeout(audio._peTimer);
             isPlayingAudio = false;
             unlockVoiceoverGate(slideIndex);
             updateGlobalAudioBtn(slideIndex);
-        });
+        };
 
         return audio;
     }
 
     function toggleAudio(slideIndex, slide) {
-        if (!slide || !slide.voiceoverUrl) return;
+        var audio = audioElements[slideIndex];
+        if (audio && !audio.paused) { audio.pause(); return; }
+        startAudio(slideIndex, slide);
+    }
+    function startAudio(slideIndex, slide) {
+        if (!slide || !slide.voiceoverUrl || slide.narrationOmitted) return;
 
         // Stop any currently playing audio from OTHER slides.
         Object.keys(audioElements).forEach(function(k) {
@@ -2324,6 +2481,7 @@ define('mod_productexplainer/player', [], function() {
         });
 
         var audio = getSlideAudio(slideIndex, slide);
+        if (audioFailed[slideIndex]) { audio.load(); audioFailed[slideIndex] = false; }
 
         if (audio.paused) {
             // FIX-SLIDE1-AUTOPLAY: play() returns a promise, and browsers reject it when
@@ -2332,57 +2490,35 @@ define('mod_productexplainer/player', [], function() {
             // empty catch and set isPlayingAudio = true regardless, so slide 1 sat
             // silent while the footer button showed a pause icon, and (because the gate
             // only opens on 'ended') "require voiceover" left Next disabled for good.
-            var playing = audio.play();
+            clearTimeout(audio._peTimer);
+            audio._peTimer = setTimeout(function() {
+                if (slideIndex !== currentSlide) return;
+                audio.pause();
+                audio.onerror();
+            }, 20000);
+            var playing;
+            var requestId = audio._peRequest = (audio._peRequest || 0) + 1;
+            try { playing = audio.play(); } catch (err) { audio.onerror(); return; }
             if (playing && typeof playing.catch === 'function') {
+                playing.then(function() {
+                    if (audio._peRequest === requestId) clearTimeout(audio._peTimer);
+                }, function() {});
                 playing.catch(function(err) {
+                    if (audio._peRequest !== requestId) return;
+                    clearTimeout(audio._peTimer);
+                    if (slideIndex !== currentSlide) return;
                     isPlayingAudio = false;
                     // AbortError just means a newer play/pause superseded this one.
                     if (!err || err.name !== 'AbortError') {
-                        audioBlocked[slideIndex] = true;
-                        armGestureUnlock();
+                        if (err && err.name !== 'NotAllowedError') {
+                            audio.onerror();
+                        } else audioBlocked[slideIndex] = true;
                     }
                     updateGlobalAudioBtn(slideIndex);
                 });
             }
-        } else {
-            audio.pause();
         }
         updateGlobalAudioBtn(slideIndex);
-    }
-
-    /**
-     * After autoplay has been refused, start the current slide's narration on the first
-     * interaction anywhere in the player. That gesture satisfies the browser's autoplay
-     * policy, so the student gets their narration without having to hunt for the play
-     * button. Pressing the play button itself is left to toggleAudio.
-     */
-    function armGestureUnlock() {
-        if (gestureUnlockBound) return;
-        gestureUnlockBound = true;
-
-        var handler = function(e) {
-            document.removeEventListener('pointerdown', handler, true);
-            document.removeEventListener('keydown', handler, true);
-            gestureUnlockBound = false;
-
-            var t = e && e.target;
-            if (t && typeof t.closest === 'function' && t.closest('#pe-audio-btn')) {
-                return; // The student pressed play; toggleAudio handles that click.
-            }
-            if (!audioBlocked[currentSlide]) return;
-            var slide = manifest && manifest.slides && manifest.slides[currentSlide];
-            if (!slide || !slide.voiceoverUrl) return;
-            var audio = audioElements[currentSlide];
-            if (!audio || !audio.paused || audio.currentTime > 0) return;
-
-            var retry = audio.play();
-            if (retry && typeof retry.catch === 'function') {
-                retry.catch(function() {});
-            }
-        };
-
-        document.addEventListener('pointerdown', handler, true);
-        document.addEventListener('keydown', handler, true);
     }
 
     // ─────────────────────────────────────────────────────────────────────────────
@@ -2964,6 +3100,10 @@ define('mod_productexplainer/player', [], function() {
     // UTILITIES
     // ─────────────────────────────────────────────────────────────────────────────
     function buildVoiceoverText(slide) {
+        return narration.resolve(slide);
+    }
+
+    function legacyBuildVoiceoverText(slide) {
         // Always use AI-generated voiceoverText when it exists and is non-empty.
         // Only skip it if it begins with a generic "Welcome to this training" style
         // opener — those were produced by older prompt versions and don't match the
@@ -3192,6 +3332,7 @@ define('mod_productexplainer/player', [], function() {
 
         var xhr = new XMLHttpRequest();
         xhr.open('POST', fullUrl, true);
+        xhr.timeout = 190000;
         xhr.setRequestHeader('Content-Type', 'application/json');
         xhr.onload = function() {
             if (xhr.status >= 200 && xhr.status < 300) {
@@ -3204,6 +3345,7 @@ define('mod_productexplainer/player', [], function() {
             }
         };
         xhr.onerror = function() { onError('Network error'); };
+        xhr.ontimeout = function() { onError('Request timed out; the service outcome is unknown'); };
         xhr.send(body || null);
     }
 
@@ -3317,263 +3459,108 @@ define('mod_productexplainer/player', [], function() {
         }, 5500);
     }
 
-    // Stop any in-flight Chirp quiz audio and cancel Web Speech fallback.
+    // Stop any in-flight configured-voice quiz narration and its playback timers.
     // Incrementing quizTtsGenId here invalidates any AJAX call that is still
     // in-flight from the previous speakQuizText() call.  Without this, if the
     // user advances to the results screen before the explanation AJAX resolves,
     // that stale audio would play over the results screen.
     function stopQuizAudio() {
         quizTtsGenId++;
+        clearTimeout(quizPlaybackTimer);
+        clearTimeout(quizStartTimer);
+        var notice = document.getElementById('pe-quiz-audio-error');
+        if (notice) notice.remove();
         if (quizCurrentAudio) {
+            quizCurrentAudio.onended = quizCurrentAudio.onerror = null;
             quizCurrentAudio.pause();
             quizCurrentAudio = null;
         }
-        if (window.speechSynthesis) window.speechSynthesis.cancel();
-    }
-
-    // Pre-generate feedback TTS in the background so it plays instantly on Check.
-    // Called as soon as the student selects an answer option — before clicking Check.
-    function prefetchFeedbackTts(text) {
-        if (!cfg.ajaxUrl || !cfg.sesskey || !cfg.cmid || isBuilderPreviewMode || !text) return;
-        prefetchQuizAudio = null;
-        prefetchQuizPending = true;
-        var myId = ++prefetchQuizGenId;
-        ajaxPost(
-            cfg.ajaxUrl,
-            { action: 'generate_quiz_tts', sesskey: cfg.sesskey, cmid: cfg.cmid },
-            JSON.stringify({ text: text, language: cfg.voiceLanguage || 'en-AU', voice: (manifest && manifest.voiceStyle) || cfg.voiceStyle || 'Zephyr' }),
-            function(data) {
-                if (myId !== prefetchQuizGenId) { prefetchQuizPending = false; return; }
-                prefetchQuizPending = false;
-                if (data && data.success && data.audioContent) {
-                    try {
-                        var binary = atob(data.audioContent);
-                        var bytes = new Uint8Array(binary.length);
-                        for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                        var blob = new Blob([bytes], { type: 'audio/ogg' });
-                        var blobUrl = URL.createObjectURL(blob);
-                        var audio = new Audio(blobUrl);
-                        prefetchQuizAudio = { text: text, audio: audio, url: blobUrl };
-                    } catch(e) {}
-                }
-            },
-            function() { prefetchQuizPending = false; }
-        );
-    }
-
-    // FIX-KC-DELAY-MAP: pre-warm BOTH possible feedback texts (correct + incorrect) at
-    // question render time so audio is cached before the student clicks an option.
-    // Uses a dedicated multi-slot object (prefetchAudioMap) so both can be stored
-    // simultaneously without cancelling each other via prefetchQuizGenId.
-    function warmupQuizFeedbacks(q) {
-        if (!cfg.ajaxUrl || !cfg.sesskey || !cfg.cmid || isBuilderPreviewMode || !q) return;
-        var letters = ['A','B','C','D'];
-        var texts = [
-            'Correct! ' + (q.explanation || ''),
-            'The correct answer is ' + (letters[q.correctAnswer] || 'A') + '. ' + (q.explanation || '')
-        ];
-        texts.forEach(function(text) {
-            var t = text.trim();
-            if (!t || prefetchAudioMap[t]) return;
-            var capturedText = t;
-            ajaxPost(
-                cfg.ajaxUrl,
-                { action: 'generate_quiz_tts', sesskey: cfg.sesskey, cmid: cfg.cmid },
-                JSON.stringify({ text: capturedText, language: cfg.voiceLanguage || 'en-AU', voice: (manifest && manifest.voiceStyle) || cfg.voiceStyle || 'Zephyr' }),
-                function(data) {
-                    if (data && data.success && data.audioContent) {
-                        try {
-                            var binary = atob(data.audioContent);
-                            var bytes = new Uint8Array(binary.length);
-                            for (var i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
-                            var blob = new Blob([bytes], { type: 'audio/ogg' });
-                            var blobUrl = URL.createObjectURL(blob);
-                            prefetchAudioMap[capturedText] = { audio: new Audio(blobUrl), url: blobUrl };
-                        } catch(e) {}
-                    }
-                },
-                function() {}
-            );
-        });
-    }
-
-    // Web Speech API fallback (used when Chirp HD call fails or is unavailable).
-    function speakQuizTextWebSpeech(text, onEnd) {
-        if (!window.speechSynthesis || !text) { if (onEnd) onEnd(); return; }
-        window.speechSynthesis.cancel();
-        var utt = new window.SpeechSynthesisUtterance(text);
-        utt.rate = 0.95;
-        utt.pitch = 1.0;
-        if (onEnd) utt.onend = onEnd;
-        window.speechSynthesis.speak(utt);
-    }
-
-    // Inner helper: fire a fresh Chirp HD AJAX call and play the result.
-    // genId must equal quizTtsGenId at callback time or the response is discarded.
-    // All failure paths call onEnd so upstream state (e.g. disabled Next button) is
-    // always resolved even when audio cannot be played.
-    function doChirpHdAjax(text, genId, onEnd) {
-        ajaxPost(
-            cfg.ajaxUrl,
-            { action: 'generate_quiz_tts', sesskey: cfg.sesskey, cmid: cfg.cmid },
-            JSON.stringify({
-                text:     text,
-                language: cfg.voiceLanguage || 'en-AU',
-                voice:    (manifest && manifest.voiceStyle) || cfg.voiceStyle || 'Zephyr'
-            }),
-            function(data) {
-                if (genId !== quizTtsGenId) { return; }
-                if (data && data.success && data.audioContent) {
-                    try {
-                        var binary = atob(data.audioContent);
-                        var bytes  = new Uint8Array(binary.length);
-                        for (var i = 0; i < binary.length; i++) {
-                            bytes[i] = binary.charCodeAt(i);
-                        }
-                        var blob  = new Blob([bytes], { type: 'audio/ogg' });
-                        var url   = URL.createObjectURL(blob);
-                        var audio = new Audio(url);
-                        quizCurrentAudio = audio;
-                        audio.onended = function() {
-                            quizCurrentAudio = null;
-                            URL.revokeObjectURL(url);
-                            if (onEnd) onEnd();
-                        };
-                        audio.onerror = function() {
-                            quizCurrentAudio = null;
-                            URL.revokeObjectURL(url);
-                            if (onEnd) onEnd();
-                        };
-                        var playPromise = audio.play();
-                        if (playPromise && playPromise.catch) {
-                            playPromise.catch(function() {
-                                quizCurrentAudio = null;
-                                URL.revokeObjectURL(url);
-                                if (onEnd) onEnd();
-                            });
-                        }
-                    } catch (e) {
-                        if (onEnd) onEnd();
-                    }
-                } else {
-                    // API returned failure — skip narration silently.
-                    // Do NOT fall back to Web Speech; switching from Chirp HD to the
-                    // browser's built-in voice mid-quiz causes the male/female voice
-                    // inconsistency reported by testers.
-                    if (onEnd) onEnd();
-                }
-            },
-            function() {
-                if (genId !== quizTtsGenId) { return; }
-                // Network error — skip narration silently (same reason as above).
-                if (onEnd) onEnd();
-            }
-        );
+        if (quizAudioUrl) { URL.revokeObjectURL(quizAudioUrl); quizAudioUrl = null; }
     }
 
     // Primary TTS function — uses the Chirp3-HD voice configured in the
-    // activity settings (cfg.voiceStyle + cfg.voiceLanguage).  Falls back to
-    // the browser Web Speech API when AJAX is unavailable or the API call fails.
+    // activity settings (cfg.voiceStyle + cfg.voiceLanguage), with no browser substitute.
     // quizTtsGenId guards against stale AJAX responses from a previous question
     // arriving after the player has already advanced to the next question.
     function speakQuizText(text, onEnd) {
-        if (!text) { if (onEnd) onEnd(); return; }
-
-        // FIX-KC-DELAY-MAP: check multi-slot pre-warm map first — populated by
-        // warmupQuizFeedbacks() at question render so audio is ready before Check is clicked.
-        var _trimText = text.trim();
-        if (prefetchAudioMap[_trimText] && prefetchAudioMap[_trimText].audio) {
-            stopQuizAudio();
-            ++quizTtsGenId;
-            var wmEntry = prefetchAudioMap[_trimText];
-            delete prefetchAudioMap[_trimText];
-            quizCurrentAudio = wmEntry.audio;
-            wmEntry.audio.onended = function() { quizCurrentAudio = null; URL.revokeObjectURL(wmEntry.url); if (onEnd) onEnd(); };
-            wmEntry.audio.onerror = function() { quizCurrentAudio = null; URL.revokeObjectURL(wmEntry.url); if (onEnd) onEnd(); };
-            var wmPlay = wmEntry.audio.play();
-            if (wmPlay && wmPlay.catch) wmPlay.catch(function() { quizCurrentAudio = null; URL.revokeObjectURL(wmEntry.url); if (onEnd) onEnd(); });
-            return;
-        }
-
         stopQuizAudio();
-        var myGenId = ++quizTtsGenId; // capture the generation ID for this call
-
-        // Use pre-fetched audio if ready (eliminates delay after answer selection).
-        if (prefetchQuizAudio && prefetchQuizAudio.text === text && prefetchQuizAudio.audio) {
-            var cached = prefetchQuizAudio;
-            prefetchQuizAudio = null;
-            quizCurrentAudio = cached.audio;
-            cached.audio.onended = function() {
-                quizCurrentAudio = null;
-                URL.revokeObjectURL(cached.url);
-                if (onEnd) onEnd();
-            };
-            cached.audio.onerror = function() {
-                quizCurrentAudio = null;
-                URL.revokeObjectURL(cached.url);
-                if (onEnd) onEnd();
-            };
-            var cachePromise = cached.audio.play();
-            if (cachePromise && cachePromise.catch) {
-                cachePromise.catch(function() {
-                    quizCurrentAudio = null;
-                    URL.revokeObjectURL(cached.url);
-                    if (onEnd) onEnd();
-                });
+        if (!text) { if (onEnd) onEnd(); return; }
+        var genId = quizTtsGenId;
+        var audio = null;
+        var finished = false;
+        function complete() {
+            if (finished || genId !== quizTtsGenId) return;
+            finished = true;
+            clearTimeout(quizPlaybackTimer);
+            var notice = document.getElementById('pe-quiz-audio-error');
+            if (notice) notice.remove();
+            if (audio) { audio.onended = audio.onerror = null; audio.pause(); }
+            if (quizAudioUrl) { URL.revokeObjectURL(quizAudioUrl); quizAudioUrl = null; }
+            quizCurrentAudio = null;
+            if (onEnd) onEnd();
+        }
+        function failure(message) {
+            if (finished || genId !== quizTtsGenId) return;
+            clearTimeout(quizPlaybackTimer);
+            clearQuizNextTimer();
+            var overlay = document.getElementById('pe-quiz-overlay');
+            if (!overlay) return;
+            var notice = document.getElementById('pe-quiz-audio-error');
+            if (!notice) {
+                notice = document.createElement('div');
+                notice.id = 'pe-quiz-audio-error';
+                notice.className = 'pe-status-msg pe-status-error';
+                notice.setAttribute('role', 'alert');
+                overlay.appendChild(notice);
             }
+            notice.innerHTML = '<p>' + escHtml(message) + '</p><button type="button" class="pe-btn pe-btn-secondary pe-btn-sm" id="pe-quiz-audio-retry">Retry narration</button> '
+                + '<button type="button" class="pe-btn pe-btn-secondary pe-btn-sm" id="pe-quiz-audio-continue">Continue without narration</button>';
+            document.getElementById('pe-quiz-audio-retry').onclick = function() {
+                notice.remove();
+                if (audio) { audio.load(); play(); }
+                else if (window.confirm('A new narration request may charge credits again if the earlier request completed. Retry?')) {
+                    speakQuizText(text, onEnd);
+                } else failure(message);
+            };
+            document.getElementById('pe-quiz-audio-continue').onclick = complete;
+        }
+        function play() {
+            if (genId !== quizTtsGenId || finished) return;
+            audio.onended = complete;
+            audio.onerror = function() { failure('Quiz narration could not be played. Retry or continue using the written question and feedback.'); };
+            quizPlaybackTimer = setTimeout(function() {
+                failure('Quiz narration has not finished. Retry or continue using the written feedback.');
+            }, 180000);
+            try {
+                var result = audio.play();
+                if (result && result.catch) result.catch(function() {
+                    failure('Press Retry narration to allow audio playback, or continue without narration.');
+                });
+            } catch (e) { failure('Quiz narration could not start. Retry or continue without narration.'); }
+        }
+        if (!cfg.ajaxUrl || !cfg.sesskey || !cfg.cmid || isBuilderPreviewMode) {
+            failure('The configured quiz narration service is unavailable. Continue using the written content.');
             return;
         }
-
-        // If a prefetch AJAX is still in-flight, wait up to 5 s for it to resolve.
-        // We do NOT fall back to Web Speech here — doing so would switch voice mid-quiz
-        // (Chirp HD for some items, browser voice for others) causing the male/female
-        // voice inconsistency reported by testers.
-        if (prefetchQuizPending) {
-            var _pWait = 0;
-            var _pMyGenId = myGenId;
-            var _pText = text;
-            var _pOnEnd = onEnd;
-            var _pInterval = setInterval(function() {
-                _pWait += 100;
-                // Pre-fetch resolved with the audio we need — use it.
-                if (prefetchQuizAudio && prefetchQuizAudio.text === _pText && prefetchQuizAudio.audio) {
-                    clearInterval(_pInterval);
-                    if (_pMyGenId !== quizTtsGenId) return;
-                    var pc = prefetchQuizAudio;
-                    prefetchQuizAudio = null;
-                    quizCurrentAudio = pc.audio;
-                    pc.audio.onended = function() { quizCurrentAudio = null; URL.revokeObjectURL(pc.url); if (_pOnEnd) _pOnEnd(); };
-                    pc.audio.onerror = function() { quizCurrentAudio = null; URL.revokeObjectURL(pc.url); if (_pOnEnd) _pOnEnd(); };
-                    var pp = pc.audio.play();
-                    if (pp && pp.catch) pp.catch(function() { quizCurrentAudio = null; URL.revokeObjectURL(pc.url); if (_pOnEnd) _pOnEnd(); });
+        ajaxPost(cfg.ajaxUrl, {action: 'generate_quiz_tts', sesskey: cfg.sesskey, cmid: cfg.cmid},
+            JSON.stringify({text: text, language: cfg.voiceLanguage || 'en-AU',
+                voice: (manifest && manifest.voiceStyle) || cfg.voiceStyle || 'Zephyr'}),
+            function(data) {
+                if (genId !== quizTtsGenId || finished) return;
+                if (!data || !data.success || !data.audioContent) {
+                    failure((data && data.error) || 'Quiz narration generation failed. Retry is manual and may charge credits.');
                     return;
                 }
-                // Pre-fetch finished but no audio for our text, OR timed out.
-                if (!prefetchQuizPending || _pWait >= 5000) {
-                    clearInterval(_pInterval);
-                    if (_pMyGenId !== quizTtsGenId) return;
-                    if (!prefetchQuizPending && cfg.ajaxUrl && cfg.sesskey && cfg.cmid && !isBuilderPreviewMode) {
-                        // Prefetch completed with wrong/no audio — make a fresh Chirp HD call
-                        // so the question IS narrated even when the prefetch raced ahead.
-                        doChirpHdAjax(_pText, _pMyGenId, _pOnEnd);
-                    } else {
-                        // Timed out (5 s) OR no AJAX credentials — skip silently to avoid
-                        // switching to Web Speech and breaking voice consistency.
-                        if (_pOnEnd) _pOnEnd();
-                    }
-                }
-            }, 100);
-            return;
-        }
-
-        // No pending prefetch — use Chirp HD directly when credentials are available.
-        if (cfg.ajaxUrl && cfg.sesskey && cfg.cmid && !isBuilderPreviewMode) {
-            doChirpHdAjax(text, myGenId, onEnd);
-            return;
-        }
-
-        // Builder preview or no AJAX — use Web Speech API.
-        speakQuizTextWebSpeech(text, onEnd);
+                try {
+                    var bytes = Uint8Array.from(atob(data.audioContent), function(c) { return c.charCodeAt(0); });
+                    quizAudioUrl = URL.createObjectURL(new Blob([bytes], {type: data.audioType || 'audio/ogg'}));
+                    audio = new Audio(quizAudioUrl);
+                    quizCurrentAudio = audio;
+                    play();
+                } catch (e) { failure('The service returned unreadable quiz audio. Retry is manual and may charge credits.'); }
+            }, function(err) {
+                failure('Quiz narration request failed: ' + err + '. Retry is manual and may charge credits if the service completed the earlier request.');
+            });
     }
 
     /**
@@ -3665,6 +3652,7 @@ define('mod_productexplainer/player', [], function() {
      *        student has not yet answered correctly, keeping their existing score.
      */
     function showQuiz(retryWrongOnly) {
+        if (!canAdvanceFromSlide(currentSlide, manifest.slides)) return;
         if (isBuilderPreviewMode) return;
         if (!quizQuestions.length) return;
 
@@ -3698,7 +3686,6 @@ define('mod_productexplainer/player', [], function() {
         quizCurrentQ = 0;
         quizSelected = null;
         quizAnswered = false;
-        prefetchAudioMap = {};
         recalcQuizScore();
 
         var overlay = document.getElementById('pe-quiz-overlay');
@@ -3743,11 +3730,6 @@ define('mod_productexplainer/player', [], function() {
         overlay.innerHTML = html;
         var startBtn = document.getElementById('pe-quiz-start-btn');
         if (startBtn) startBtn.addEventListener('click', function() { renderQuizQuestion(0); });
-        // FIX-QUIZ-Q0-AUDIO-DELAY: Pre-warm Q0 question TTS now, while student reads splash.
-        // By the time they click Start, the audio is cached and plays instantly.
-        if (quizQuestions.length > 0) {
-            prefetchFeedbackTts(quizQuestions[0].question || '');
-        }
     }
 
     function renderQuizQuestion(idx) {
@@ -3809,11 +3791,8 @@ define('mod_productexplainer/player', [], function() {
 
         overlay.innerHTML = html;
         bindQuizOptions();
-        // FIX-KC-FEEDBACK-DELAY: pre-warm BOTH feedback texts (correct + incorrect) now,
-        // before the student selects any option, so audio is ready when Check is clicked.
-        warmupQuizFeedbacks(q);
         var qText = q.question || '';
-        if (qText) setTimeout(function() { speakQuizText(qText); }, 50);
+        if (qText) quizStartTimer = setTimeout(function() { speakQuizText(qText); }, 50);
     }
 
     function bindQuizOptions() {
@@ -3837,14 +3816,6 @@ define('mod_productexplainer/player', [], function() {
         quizSelected = idx;
         var cb = document.getElementById('pe-quiz-check-btn');
         if (cb) cb.disabled = false;
-        // Pre-generate feedback TTS now so it's ready the instant Check is clicked
-        var q = quizQuestions[currentQuizIdx()];
-        if (q) {
-            var letters = ['A','B','C','D'];
-            var isOk = (idx === q.correctAnswer);
-            var prefix = isOk ? 'Correct! ' : 'The correct answer is ' + (letters[q.correctAnswer] || String((q.correctAnswer || 0) + 1)) + '. ';
-            prefetchFeedbackTts(prefix + (q.explanation || ''));
-        }
     }
 
     function checkQuizAnswer() {
@@ -3919,29 +3890,7 @@ define('mod_productexplainer/player', [], function() {
                 var nbEl = document.getElementById('pe-quiz-next-btn');
                 if (nbEl) nbEl.disabled = false;
             } : null);
-            // FIX-NEXT-BTN-STRANDED: several TTS paths (stale generation id, prefetch
-            // timeout) return without ever calling onEnd, which used to leave the student
-            // stuck on the feedback screen with a permanently disabled Next button.
-            // This safety net always re-enables it.
-            if (!isOk) {
-                clearQuizNextTimer();
-                quizNextTimer = setTimeout(function() {
-                    quizNextTimer = null;
-                    var nbEl = document.getElementById('pe-quiz-next-btn');
-                    if (nbEl) nbEl.disabled = false;
-                }, 12000);
-            }
-            // FIX-QUIZ-NEXT-Q-AUDIO-DELAY: Pre-warm next question's TTS while student reads
-            // feedback — 1.5 s delay lets speakQuizText consume the feedback cache first.
-            // Follows quizOrder so a retry run pre-warms the next OUTSTANDING question.
-            var _nextPos = quizCurrentQ + 1;
-            if (_nextPos < quizOrder.length) {
-                var _nextQ = quizQuestions[quizOrder[_nextPos]];
-                var _nextQText = _nextQ ? (_nextQ.question || '') : '';
-                if (_nextQText) {
-                    setTimeout(function() { prefetchFeedbackTts(_nextQText); }, 1500);
-                }
-            }
+            // Failure offers explicit Retry / Continue; no silent timer skip.
         }
 
         // Swap buttons — for incorrect answers, Next stays disabled until voiceover ends
@@ -4146,6 +4095,7 @@ define('mod_productexplainer/player', [], function() {
     }
 
     function showCertificate() {
+        if (!canAdvanceFromSlide(currentSlide, manifest.slides)) return;
         if (!cfg.enableCertificate || isBuilderPreviewMode) return;
         // FEAT-PASS-MARK-WIRED: when the activity has a quiz, the certificate is only
         // available to a student who has met the pass mark. Previously showCertificate()

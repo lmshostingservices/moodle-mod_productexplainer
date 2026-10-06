@@ -40,6 +40,8 @@ try {
     require_once(__DIR__ . '/../../config.php');
 require_login();
     require_once($CFG->libdir . '/filelib.php');
+    require_once(__DIR__ . '/classes/local/narration.php');
+    require_once(__DIR__ . '/classes/local/audio_format.php');
 
     $aiconfiglib = $CFG->dirroot . '/local/aiconfig/lib.php';
     if (file_exists($aiconfiglib)) {
@@ -358,6 +360,18 @@ require_login();
             echo json_encode(['success' => false, 'error' => 'Invalid manifest.']);
             exit;
         }
+        if (!isset($manifest['slides']) || !is_array($manifest['slides'])) {
+            echo json_encode(['success' => false, 'error' => 'Invalid slides.']);
+            exit;
+        }
+        foreach ($manifest['slides'] as &$slide) {
+            if (!is_array($slide) || \mod_productexplainer\local\narration::incomplete($slide)) {
+                echo json_encode(['success' => false, 'error' => 'Narration is incomplete or stale. Regenerate or explicitly omit it before publishing.']);
+                exit;
+            }
+            $slide['narrationScript'] = \mod_productexplainer\local\narration::resolve($slide);
+        }
+        unset($slide);
 
         $json      = json_encode($manifest);
         $compressed = base64_encode(gzencode($json, 6));
@@ -476,19 +490,21 @@ require_login();
         // play ("Narration unavailable") — while the generator reported success. The
         // old file was already deleted by then, so a slide that previously worked could
         // be left broken. Validate first, write to a temporary name, verify, then swap.
-        $audioBytes = base64_decode($result['audioContent'], true);
-        if ($audioBytes === false || strlen($audioBytes) < 512) {
+        try {
+            $format = \mod_productexplainer\local\audio_format::decode($result['audioContent'], $result['audioType'] ?? '');
+        } catch (\InvalidArgumentException $e) {
             echo json_encode([
                 'success' => false,
-                'error'   => 'The narration service returned no usable audio for slide '
-                    . ($slideIndex + 1) . '. The existing narration has been left in place. '
-                    . 'Please try generating again.',
+                'error'   => $e->getMessage() . ' Retry is manual and may charge credits again.',
             ]);
             exit;
         }
 
-        $audioFilename = 'slide_' . $slideIndex . '.ogg';
-        $tempfilename  = 'slide_' . $slideIndex . '.new.ogg';
+        $audioBytes = $format['bytes'];
+        // Immutable, unique files keep saved manifests and old recordings safe even if
+        // generation succeeds but the browser loses the response or never publishes.
+        $audioFilename = 'slide_' . $slideIndex . '_' . bin2hex(random_bytes(12)) . '.' . $format['extension'];
+        $tempfilename = $audioFilename;
         $fs = get_file_storage();
 
         // Write the new audio under a temporary name first, so a failure cannot destroy
@@ -505,6 +521,7 @@ require_login();
             'itemid'    => $pe->id,
             'filepath'  => '/',
             'filename'  => $tempfilename,
+            'mimetype'  => $format['type'],
         ];
 
         try {
@@ -513,7 +530,8 @@ require_login();
             $written = null;
         }
 
-        if (!$written || $written->get_filesize() < 512) {
+        if (!$written || (int)$written->get_filesize() !== strlen($audioBytes)
+                || hash('sha256', $written->get_content()) !== hash('sha256', $audioBytes)) {
             if ($written) {
                 $written->delete();
             }
@@ -526,11 +544,7 @@ require_login();
         }
 
         // The new file is good — now replace the old one and rename into place.
-        $existing = $fs->get_file($context->id, 'mod_productexplainer', 'slidevoiceovers', $pe->id, '/', $audioFilename);
-        if ($existing) {
-            $existing->delete();
-        }
-        $written->rename('/', $audioFilename);
+        // No destructive rename: the old link remains valid until the teacher publishes.
 
         $audioUrl = moodle_url::make_pluginfile_url(
             $context->id, 'mod_productexplainer', 'slidevoiceovers', $pe->id, '/', $audioFilename
@@ -541,6 +555,8 @@ require_login();
             'audioUrl'   => $audioUrl->out(false),
             'slideIndex' => $slideIndex,
             'bytes'      => (int)$written->get_filesize(),
+            'audioType'  => $format['type'],
+            'sourceText' => $text,
         ]);
         exit;
     }
@@ -584,7 +600,13 @@ require_login();
             exit;
         }
 
-        echo json_encode(['success' => true, 'audioContent' => $result['audioContent']]);
+        try {
+            $format = \mod_productexplainer\local\audio_format::decode($result['audioContent'], $result['audioType'] ?? '');
+        } catch (\InvalidArgumentException $e) {
+            echo json_encode(['success' => false, 'error' => $e->getMessage()]);
+            exit;
+        }
+        echo json_encode(['success' => true, 'audioContent' => $result['audioContent'], 'audioType' => $format['type']]);
         exit;
     }
 
