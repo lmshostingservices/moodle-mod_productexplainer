@@ -7,6 +7,34 @@ Versions correspond to `$plugin->release` in `version.php`.
 
 ---
 
+## [1.0.111] - 2026-10-06
+
+Documentation. No functional, schema or behavioural changes.
+
+### Changed
+
+- `README.md` replaced. It had been a seven-line placeholder ("Moodle plugin.") since
+  before the plugin was first submitted. It now documents what the activity does, the
+  Moodle/PHP/database requirements, installation and configuration, the capabilities and
+  their default roles, the data the plugin stores, and — importantly — that the plugin
+  requires an LMS-Labs account and calls `https://lms-labs.com` to generate content,
+  together with the credit cost of each action.
+
+### Fixed
+
+- Credit costs in the documentation now match what the server actually bills. Product
+  deck generation is not a flat 10 credits — `ajax.php` charges
+  `floor(slideCount * 5 / 3)`, so the cost scales with deck size.
+
+---
+
+## [1.0.110] - 2026-09-09
+
+Version bump for re-upload to the release pipeline. No code, schema or behavioural changes
+from 1.0.109 — `version.php` metadata only.
+
+---
+
 ## [1.0.109] - 2026-09-09
 
 Release-pipeline compliance. No functional or schema changes.
