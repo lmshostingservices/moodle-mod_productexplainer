@@ -365,7 +365,9 @@ require_login();
             exit;
         }
         foreach ($manifest['slides'] as &$slide) {
-            if (!is_array($slide) || \mod_productexplainer\local\narration::incomplete($slide)) {
+            // Narration staleness only matters when voiceover is enabled for this activity.
+            if (!is_array($slide) || (!empty($pe->enablevoiceover)
+                    && \mod_productexplainer\local\narration::incomplete($slide))) {
                 echo json_encode(['success' => false, 'error' => 'Narration is incomplete or stale. Regenerate or explicitly omit it before publishing.']);
                 exit;
             }

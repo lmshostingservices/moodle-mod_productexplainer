@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.115] - 2026-10-27
+
+### Fixed
+
+- **Slide text could not be edited.** The builder had no editor for the text shown on slides; the only text boxes were the narration scripts, and those are hidden whenever *Enable voiceover* is off. A new **Slide Text** panel lists every displayed field of every slide (title, body fields, list items) and is always shown in edit mode, regardless of the voiceover setting. The preview updates when a field loses focus and stays on the edited slide.
+- When voiceover is off, the Slide Text panel now says so and links to the activity settings, instead of narration and voiceover tools silently disappearing.
+- Editing slide text keeps an auto-mode narration script in step and marks existing audio as out of date, so it can be regenerated or omitted.
+- With voiceover off, out-of-date narration no longer blocks Save & Publish (client and `save_manifest`), since no audio is played.
+
 ## [1.0.114] - 2026-10-06
 
 ### Fixed

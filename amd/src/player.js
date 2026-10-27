@@ -359,6 +359,7 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
         html += '<div id="pe-builder-player-area"></div>';
         html += '<p style="font-size:0.8rem;color:#6b7280;margin-top:10px;text-align:center;">Click the image area on each slide to upload your own photo or graphic.</p>';
         html += buildAddSlidePanel();
+        html += '<div id="pe-slidetext-editor" style="display:none"></div>';
         html += '<div id="pe-narration-editor" style="display:none"></div>';
         html += '<div id="pe-quiz-editor" style="display:none"></div>';
         if (cfg.enableVoiceover) {
@@ -588,6 +589,7 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
         html += '<div id="pe-builder-player-area"></div>';
         html += '<p style="font-size:0.8rem;color:#6b7280;margin-top:10px;text-align:center;">AI images are generated automatically. Click the image area to replace with your own.</p>';
         html += buildAddSlidePanel();
+        html += '<div id="pe-slidetext-editor" style="display:none"></div>';
         html += '<div id="pe-narration-editor" style="display:none"></div>';
         html += '<div id="pe-quiz-editor" style="display:none"></div>';
         if (cfg.enableVoiceover) {
@@ -1098,6 +1100,149 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
             ? 'Requested narration is missing, failed or out of date. Regenerate or explicitly omit narration before publishing.' : '';
     }
 
+    // ── Slide text editor (builder view) ──────────────────────────────────────
+    // FIX-SLIDE-TEXT-EDIT (v1.0.115): the on-screen text of every slide is editable
+    // here whether or not voiceover is enabled. Fields come from the narration
+    // module's per-type field map, which lists exactly what each renderer displays,
+    // so the editor, the slide and the auto narration script stay in step.
+    var SLIDE_TEXT_SKIP = /url|prompt|icon|color|colour|voiceover|narration|^_|class|mustWatch/i;
+
+    function humaniseKey(key) {
+        return String(key).replace(/([a-z])([A-Z])/g, '$1 $2').replace(/[_-]+/g, ' ')
+            .replace(/^./, function(c) { return c.toUpperCase(); });
+    }
+
+    function collectSlideTextFields(slide) {
+        var out = [];
+        if (typeof slide.title === 'string') out.push({ path: ['title'], label: 'Title', value: slide.title });
+        if (slide.type === 'pe-video-slide' || slide.type === 'pe-image-slide') return out;
+        var c = slide.content;
+        function walk(value, path, label, key, depth) {
+            if (depth > 6 || value == null) return;
+            if (typeof value === 'string' || typeof value === 'number') {
+                out.push({ path: path, label: label, value: String(value) });
+                return;
+            }
+            if (Array.isArray(value)) {
+                value.forEach(function(v, i) { walk(v, path.concat([i]), label + ' ' + (i + 1), key, depth + 1); });
+                return;
+            }
+            if (typeof value === 'object') {
+                var keys = narration.nested[key] ? narration.nested[key].split(' ')
+                    : Object.keys(value).filter(function(k) { return !SLIDE_TEXT_SKIP.test(k); });
+                keys.forEach(function(k) {
+                    if (value[k] === undefined) return;
+                    walk(value[k], path.concat([k]), label + ' · ' + humaniseKey(k), k, depth + 1);
+                });
+            }
+        }
+        var keys = Object.prototype.hasOwnProperty.call(narration.fields, slide.type)
+            ? narration.fields[slide.type].split(' ').filter(Boolean)
+            : (c && typeof c === 'object' ? Object.keys(c).filter(function(k) { return !SLIDE_TEXT_SKIP.test(k); }) : []);
+        keys.forEach(function(k) {
+            if (c && c[k] !== undefined) walk(c[k], ['content', k], humaniseKey(k), k, 0);
+            else if (k === 'productName' && typeof slide[k] === 'string') walk(slide[k], [k], humaniseKey(k), k, 0);
+        });
+        return out;
+    }
+
+    function setAtPath(obj, path, value) {
+        var o = obj;
+        for (var i = 0; i < path.length - 1; i++) {
+            if (o == null) return;
+            o = o[path[i]];
+        }
+        if (o == null) return;
+        var last = path[path.length - 1];
+        o[last] = (typeof o[last] === 'number' && value.trim() !== '' && !isNaN(Number(value))) ? Number(value) : value;
+    }
+
+    function renderSlideTextEditorHTML() {
+        if (!manifest || !manifest.slides) return '';
+        var chevDown = '<svg viewBox="0 0 24 24" width="16" height="16" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor" fill="none"><polyline points="6 9 12 15 18 9"/></svg>';
+        var html = '<div class="pe-narration-editor">';
+        html += '<div class="pe-narration-header">';
+        html += '<div class="pe-narration-header-left">';
+        html += '<span class="pe-narration-header-icon">' + icon('edit') + '</span>';
+        html += '<div>';
+        html += '<p class="pe-narration-title">Slide Text</p>';
+        html += '<p class="pe-narration-desc">Edit the text shown on each slide. The preview updates when you leave a field. Changes are included when you Save &amp; Publish.</p>';
+        if (!cfg.enableVoiceover) {
+            var settingsUrl = (cfg.ajaxUrl || '').replace(/\/mod\/productexplainer\/ajax\.php.*$/, '/course/modedit.php?update=' + encodeURIComponent(cfg.cmid));
+            html += '<p class="pe-narration-desc"><strong>Voiceover is turned off for this activity</strong>, so narration scripts and voiceover generation are hidden. '
+                + 'To edit or regenerate narration, set <em>Voiceover &rarr; Enable voiceover</em> to Yes in '
+                + '<a href="' + escHtml(settingsUrl) + '">activity settings</a>.</p>';
+        }
+        html += '</div>';
+        html += '</div>';
+        html += '<button class="pe-narration-toggle-btn" id="pe-slidetext-toggle-btn" type="button">' + chevDown + '<span>Expand</span></button>';
+        html += '</div>';
+        html += '<div class="pe-narration-body" id="pe-slidetext-body" style="display:none">';
+        manifest.slides.forEach(function(slide, i) {
+            var fields = collectSlideTextFields(slide || {});
+            html += '<div class="pe-narration-slide-item">';
+            html += '<p class="pe-narration-slide-label" style="font-weight:700;">Slide ' + (i + 1) + ' &bull; ' + escHtml((slide && slide.title) || '') + '</p>';
+            if (!fields.length) {
+                html += '<p class="pe-narration-desc">No editable text on this slide.</p>';
+            }
+            fields.forEach(function(f) {
+                var rows = Math.min(8, Math.max(1, Math.ceil(f.value.length / 90)));
+                html += '<label class="pe-narration-slide-label" style="display:block;margin-top:8px;">' + escHtml(f.label) + '</label>';
+                html += '<textarea class="pe-slidetext-ta" rows="' + rows + '" data-slide="' + i + '" data-path="'
+                    + escHtml(JSON.stringify(f.path)) + '">' + escHtml(f.value) + '</textarea>';
+            });
+            html += '</div>';
+        });
+        html += '</div>';
+        html += '</div>';
+        return html;
+    }
+
+    function refreshBuilderPreviewKeepingSlide(idx) {
+        var playerArea = document.getElementById('pe-builder-player-area');
+        if (!playerArea || !manifest) return;
+        renderPlayerHTML(playerArea, true);
+        if (idx > 0 && idx < manifest.slides.length) {
+            currentSlide = idx;
+            showSlide(idx, manifest.slides.length, false);
+        }
+        updateVideoBuilderBar();
+    }
+
+    function bindSlideTextEditorEvents() {
+        var toggleBtn = document.getElementById('pe-slidetext-toggle-btn');
+        var body = document.getElementById('pe-slidetext-body');
+        var chevUp = '<svg viewBox="0 0 24 24" width="16" height="16" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor" fill="none"><polyline points="18 15 12 9 6 15"/></svg>';
+        var chevDown = '<svg viewBox="0 0 24 24" width="16" height="16" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" stroke="currentColor" fill="none"><polyline points="6 9 12 15 18 9"/></svg>';
+        if (toggleBtn && body) {
+            toggleBtn.addEventListener('click', function() {
+                var isOpen = body.style.display !== 'none';
+                body.style.display = isOpen ? 'none' : 'block';
+                toggleBtn.innerHTML = isOpen ? chevDown + '<span>Expand</span>' : chevUp + '<span>Collapse</span>';
+            });
+        }
+        var root = document.getElementById('pe-slidetext-editor');
+        if (!root) return;
+        root.querySelectorAll('.pe-slidetext-ta').forEach(function(ta) {
+            var idx = parseInt(ta.getAttribute('data-slide'), 10);
+            var path;
+            try { path = JSON.parse(ta.getAttribute('data-path')); } catch (e) { path = null; }
+            if (isNaN(idx) || !Array.isArray(path)) return;
+            ta.addEventListener('input', function() {
+                if (generationRunning || !manifest || !manifest.slides[idx]) return;
+                setAtPath(manifest.slides[idx], path, ta.value);
+                // Keep an auto-mode narration script in step with the slide text.
+                var nta = document.querySelector('#pe-narration-editor [data-narration-idx="' + idx + '"]');
+                if (nta && manifest.slides[idx].narrationMode !== 'override') nta.value = buildVoiceoverText(manifest.slides[idx]);
+                refreshNarrationState(idx);
+            });
+            ta.addEventListener('change', function() {
+                if (generationRunning) return;
+                refreshBuilderPreviewKeepingSlide(idx);
+            });
+        });
+    }
+
     // ── Quiz editor (builder view) ────────────────────────────────────────────
 
     function renderQuizEditorHTML() {
@@ -1497,6 +1642,13 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
             renderPlayerHTML(playerArea, true);
             updateVideoBuilderBar();
         }
+        // Slide text editor — always available, independent of the voiceover setting.
+        var slideTextEl = document.getElementById('pe-slidetext-editor');
+        if (slideTextEl && manifest && manifest.slides && manifest.slides.length) {
+            slideTextEl.style.display = 'block';
+            slideTextEl.innerHTML = renderSlideTextEditorHTML();
+            bindSlideTextEditorEvents();
+        }
         // Populate narration editor (only when voiceover is enabled)
         var narrationEl = document.getElementById('pe-narration-editor');
         if (narrationEl && manifest && cfg.enableVoiceover) {
@@ -1610,7 +1762,7 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
             showStatus(saveStatusId, 'Nothing to save — generate slides first.', 'error');
             return;
         }
-        if (manifest.slides.some(narration.incomplete)) {
+        if (cfg.enableVoiceover && manifest.slides.some(narration.incomplete)) {
             showStatus(saveStatusId, 'Narration is incomplete or out of date. Regenerate it or explicitly select Omit narration for the affected slides.', 'error');
             return;
         }
