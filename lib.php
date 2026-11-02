@@ -105,10 +105,13 @@ function productexplainer_get_coursemodule_info($coursemodule) {
     if ($coursemodule->showdescription) {
         $result->content = format_module_intro('productexplainer', $pe, $coursemodule->id, false);
     }
+    // Custom rules are evaluated by \mod_productexplainer\completion\custom_completion.
+    // Only rule names may appear in customcompletionrules: Moodle validates every key
+    // against custom_completion::get_defined_custom_rules(). The pass mark lives beside it.
     $result->customdata['customcompletionrules'] = [
-        'completionquiz'        => (int)($pe->completionquiz ?? 0),
-        'completionquizpercent' => (int)($pe->completionquizpercent ?? 100),
+        'completionquiz' => (int)($pe->completionquiz ?? 0),
     ];
+    $result->customdata['completionquizpercent'] = (int)($pe->completionquizpercent ?? 100);
     return $result;
 }
 
@@ -133,7 +136,7 @@ function productexplainer_get_completion_active_rule_descriptions($cm) {
     $descriptions = [];
     $rules = $cm->customdata['customcompletionrules'] ?? [];
     if (!empty($rules['completionquiz'])) {
-        $pct  = (int)($rules['completionquizpercent'] ?? 100);
+        $pct  = (int)($cm->customdata['completionquizpercent'] ?? 100);
         $descriptions[] = get_string('completionquiz_desc', 'productexplainer') . ' (' . $pct . '%)';
     }
     return $descriptions;

@@ -29,5 +29,17 @@ function xmldb_productexplainer_upgrade($oldversion) {
     if ($oldversion < 2026072300) {
         upgrade_mod_savepoint(true, 2026072300, 'productexplainer');
     }
+
+    if ($oldversion < 2026110200) {
+        // Views were never recorded and the quiz rule was never evaluated before this
+        // version. Queue a one-off task to repair completion for existing students.
+        // Cached course module info carried an invalid customcompletionrules key; rebuild it.
+        global $DB;
+        foreach ($DB->get_fieldset_sql('SELECT DISTINCT course FROM {productexplainer}') as $courseid) {
+            rebuild_course_cache((int)$courseid, true);
+        }
+        \core\task\manager::queue_adhoc_task(new \mod_productexplainer\task\backfill_completion(), true);
+        upgrade_mod_savepoint(true, 2026110200, 'productexplainer');
+    }
     return true;
 }

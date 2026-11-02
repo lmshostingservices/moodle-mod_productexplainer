@@ -1,5 +1,14 @@
 # Changelog
 
+## [1.0.116] - 2026-11-02
+
+### Fixed
+
+- **"View the activity" completion never ticked.** `lib.php` declares `FEATURE_COMPLETION_TRACKS_VIEWS`, but `view.php` never called `completion_info::set_module_viewed()`. It now does, so the View condition is recorded on every visit.
+- **"Pass the knowledge quiz" was never evaluated on Moodle 4.x.** Moodle 3.11+ only reads custom completion rules from `classes/completion/custom_completion.php`, which did not exist; the legacy `productexplainer_get_completion_state()` callback is ignored. The rule is now implemented there (best score ≥ minimum score required) and appears in the activity's completion requirements.
+- **Views are now logged.** Added `\mod_productexplainer\event\course_module_viewed`, so visits appear in course logs and the participation and activity reports.
+- **Existing students are repaired.** The upgrade queues a one-off ad hoc task that marks anyone with a saved quiz attempt as having viewed the activity and re-evaluates their completion. It runs on the next cron.
+
 ## [1.0.115] - 2026-10-27
 
 ### Fixed

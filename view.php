@@ -42,6 +42,18 @@ if (get_capability_info('mod/productexplainer:view')) {
     require_capability('mod/productexplainer:view', $context);
 }
 
+// Log the view and mark the "view" completion condition.
+require_once($CFG->libdir . '/completionlib.php');
+$event = \mod_productexplainer\event\course_module_viewed::create([
+    'objectid' => $pe->id,
+    'context'  => $context,
+]);
+$event->add_record_snapshot('course', $course);
+$event->add_record_snapshot('productexplainer', $pe);
+$event->trigger();
+$completion = new completion_info($course);
+$completion->set_module_viewed($cm);
+
 $PAGE->set_url('/mod/productexplainer/view.php', ['id' => $id]);
 $PAGE->set_title(format_string($pe->name));
 $PAGE->set_heading(format_string($course->fullname));
