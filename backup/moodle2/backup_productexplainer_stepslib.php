@@ -62,6 +62,12 @@ class backup_productexplainer_activity_structure_step extends backup_activity_st
 
         $productexplainer->set_source_table('productexplainer', ['id' => backup::VAR_ACTIVITYID]);
 
+        // Slide images and per-slide voiceovers live in the activity's own file areas (itemid = instance id).
+        // Without these annotations a backup/restore or course import loses every slide picture and narration clip.
+        $productexplainer->annotate_files('mod_productexplainer', 'intro', null);
+        $productexplainer->annotate_files('mod_productexplainer', 'slideimages', 'id');
+        $productexplainer->annotate_files('mod_productexplainer', 'slidevoiceovers', 'id');
+
         if ($userinfo) {
             $attempt->set_source_table('productexplainer_attempts', ['productexplainerid' => backup::VAR_PARENTID], 'id ASC');
             $slidetime->set_source_table('productexplainer_slidetimes', ['attemptid' => backup::VAR_PARENTID], 'id ASC');

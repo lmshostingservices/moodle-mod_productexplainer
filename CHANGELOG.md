@@ -1,5 +1,13 @@
 # Changelog
 
+## [1.0.117] - 2026-11-05
+
+### Fixed
+- **Slide images and narration were lost on backup, restore and course import.** The backup did not
+  include the `slideimages` and `slidevoiceovers` file areas, and the stored slide manifest kept
+  absolute links to the source site. Backups now carry both file areas, and restore rewrites every
+  slide image and voiceover link to the new site, context and activity. No database changes.
+
 ## [1.0.116] - 2026-11-02
 
 ### Fixed

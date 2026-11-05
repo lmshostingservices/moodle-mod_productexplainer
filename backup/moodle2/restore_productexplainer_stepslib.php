@@ -91,6 +91,55 @@ class restore_productexplainer_activity_structure_step extends restore_activity_
     }
 
     protected function after_execute() {
+        global $DB;
+
         $this->add_related_files('mod_productexplainer', 'intro', null);
+        $this->add_related_files('mod_productexplainer', 'slideimages', 'productexplainer');
+        $this->add_related_files('mod_productexplainer', 'slidevoiceovers', 'productexplainer');
+
+        // The manifest stores absolute pluginfile URLs (site, context id and instance id of the source).
+        // Point them at this site, this module context and the new instance id.
+        $newid = $this->task->get_activityid();
+        $pe = $DB->get_record('productexplainer', ['id' => $newid], 'id, manifestjson');
+        if (!$pe || empty($pe->manifestjson)) {
+            return;
+        }
+        $raw = $pe->manifestjson;
+        $compressed = (strncmp($raw, 'gz:', 3) === 0);
+        $json = $compressed ? @gzdecode((string)base64_decode(substr($raw, 3), true)) : $raw;
+        if ($json === false || $json === '') {
+            return;
+        }
+        $manifest = json_decode($json, true);
+        if (!is_array($manifest)) {
+            return;
+        }
+        $contextid = $this->task->get_contextid();
+        $changed = false;
+        array_walk_recursive($manifest, function(&$value) use ($contextid, $newid, &$changed) {
+            if (!is_string($value) || strpos($value, '/mod_productexplainer/') === false) {
+                return;
+            }
+            $fixed = preg_replace_callback(
+                '~^(?:https?://[^\s"]*?)?/pluginfile\.php/\d+/mod_productexplainer/(slideimages|slidevoiceovers)/\d+(/[^?#\s"]*)~',
+                function($m) use ($contextid, $newid) {
+                    $path = $m[2];
+                    $dir = dirname($path);
+                    $file = basename($path);
+                    return \moodle_url::make_pluginfile_url($contextid, 'mod_productexplainer', $m[1], $newid,
+                        ($dir === '/' || $dir === '.') ? '/' : $dir . '/', $file)->out(false);
+                },
+                $value
+            );
+            if ($fixed !== null && $fixed !== $value) {
+                $value = $fixed;
+                $changed = true;
+            }
+        });
+        if ($changed) {
+            $json = json_encode($manifest);
+            $DB->set_field('productexplainer', 'manifestjson',
+                $compressed ? 'gz:' . base64_encode(gzencode($json, 6)) : $json, ['id' => $newid]);
+        }
     }
 }
