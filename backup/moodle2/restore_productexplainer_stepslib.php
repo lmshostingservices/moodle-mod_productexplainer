@@ -116,13 +116,13 @@ class restore_productexplainer_activity_structure_step extends restore_activity_
         }
         $contextid = $this->task->get_contextid();
         $changed = false;
-        array_walk_recursive($manifest, function(&$value) use ($contextid, $newid, &$changed) {
+        array_walk_recursive($manifest, function (&$value) use ($contextid, $newid, &$changed) {
             if (!is_string($value) || strpos($value, '/mod_productexplainer/') === false) {
                 return;
             }
             $fixed = preg_replace_callback(
                 '~^(?:https?://[^\s"]*?)?/pluginfile\.php/\d+/mod_productexplainer/(slideimages|slidevoiceovers)/\d+(/[^?#\s"]*)~',
-                function($m) use ($contextid, $newid) {
+                function ($m) use ($contextid, $newid) {
                     $path = $m[2];
                     $dir = dirname($path);
                     $file = basename($path);

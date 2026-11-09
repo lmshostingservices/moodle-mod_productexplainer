@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.0.120] - 2026-11-09
+- Ship the native AI Course Builder generator adapter through Slide Flow's concept-generation and module-owned manifest-storage workflow.
+
+## [1.0.119] - 2026-11-07
+- Add the AI Course Builder native adapter using Slide Flow's concept-generation route and manifest storage.
+- Share manifest validation, compression and narration normalization with the activity's existing save path.
+
 ## [1.0.117] - 2026-11-05
 
 ### Fixed

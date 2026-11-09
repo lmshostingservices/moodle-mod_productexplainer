@@ -29,6 +29,9 @@ $string['modulenameplural'] = 'AI Slide Flows';
 $string['modulename_help'] = 'Create AI-powered training slides in two modes: Product Slides (upload a product document and generate structured retail training slides) or Concept Slides (teach any workplace concept with 7 fixed AI-structured slides and AI-generated images). Generating slides costs 10 credits. Concept images are 2 credits each. Voiceover narration is 3 credits per slide.';
 $string['pluginname'] = 'AI Slide Flow';
 $string['pluginadministration'] = 'AI Slide Flow administration';
+$string['invalidslides'] = 'The slide manifest is empty or invalid.';
+$string['narrationincomplete'] = 'Voiceover narration is incomplete or out of date.';
+$string['missingcredentials'] = 'LMS Labs credentials are not configured for this Moodle site.';
 
 $string['productexplainer:addinstance'] = 'Add a new AI Slide Flow activity';
 $string['productexplainer:view'] = 'View AI Slide Flow';

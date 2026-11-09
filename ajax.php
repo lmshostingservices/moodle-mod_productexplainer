@@ -364,23 +364,7 @@ require_login();
             echo json_encode(['success' => false, 'error' => 'Invalid slides.']);
             exit;
         }
-        foreach ($manifest['slides'] as &$slide) {
-            // Narration staleness only matters when voiceover is enabled for this activity.
-            if (!is_array($slide) || (!empty($pe->enablevoiceover)
-                    && \mod_productexplainer\local\narration::incomplete($slide))) {
-                echo json_encode(['success' => false, 'error' => 'Narration is incomplete or stale. Regenerate or explicitly omit it before publishing.']);
-                exit;
-            }
-            $slide['narrationScript'] = \mod_productexplainer\local\narration::resolve($slide);
-        }
-        unset($slide);
-
-        $json      = json_encode($manifest);
-        $compressed = base64_encode(gzencode($json, 6));
-        $toStore   = 'gz:' . $compressed;
-
-        $DB->set_field('productexplainer', 'manifestjson', $toStore, ['id' => $pe->id]);
-        $DB->set_field('productexplainer', 'timemodified', time(), ['id' => $pe->id]);
+        \mod_productexplainer\local\manifest_storage::save($pe, $manifest, !empty($pe->enablevoiceover));
 
         echo json_encode(['success' => true]);
         exit;
@@ -390,15 +374,7 @@ require_login();
     // ACTION: get_manifest
     // -----------------------------------------------------------------------
     if ($action === 'get_manifest') {
-        $raw = $pe->manifestjson ?? '';
-        if (empty($raw)) {
-            echo json_encode(['success' => true, 'manifest' => null]);
-            exit;
-        }
-        if (strncmp($raw, 'gz:', 3) === 0) {
-            $raw = gzdecode(base64_decode(substr($raw, 3)));
-        }
-        $decoded = json_decode($raw, true);
+        $decoded = \mod_productexplainer\local\manifest_storage::decode($pe->manifestjson ?? '');
         echo json_encode(['success' => true, 'manifest' => $decoded]);
         exit;
     }

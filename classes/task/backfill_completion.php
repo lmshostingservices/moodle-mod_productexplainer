@@ -27,7 +27,6 @@ namespace mod_productexplainer\task;
  * @license    http://www.gnu.org/copyleft/gpl.html GNU GPL v3 or later
  */
 class backfill_completion extends \core\task\adhoc_task {
-
     /**
      * Run the backfill.
      */
