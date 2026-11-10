@@ -1,5 +1,8 @@
 # Changelog
 
+## [1.1.0] - 2026-11-10
+- A deck built by AI Course Builder now gets a picture on each of its seven slides, made through the editor's own image route (2 credits each, the same as "New image"), so it no longer opens with empty picture panels. The Course Builder price is 24 credits (10 for the slides and 14 for the pictures). If a picture cannot be made, that slide keeps its text and the deck still completes.
+
 ## [1.0.120] - 2026-11-09
 - Ship the native AI Course Builder generator adapter through Slide Flow's concept-generation and module-owned manifest-storage workflow.
 

@@ -32,6 +32,12 @@ final class generator {
     /** @var int */
     private const CONCEPT_PRICE = 10;
 
+    /** @var int One slide picture, the price of "New image" in the editor. */
+    private const IMAGE_PRICE = 2;
+
+    /** @var int Pictures made for a Course Builder deck: one per concept slide. */
+    private const IMAGE_SLIDES = 7;
+
     /**
      * Return the server price for the plugin's fixed seven-slide concept workflow.
      *
@@ -39,7 +45,8 @@ final class generator {
      * @return int
      */
     public static function native_estimate(array $brief): int {
-        return self::CONCEPT_PRICE;
+        // The seven slides and the picture on each, as when a teacher makes the deck by hand.
+        return self::CONCEPT_PRICE + self::IMAGE_PRICE * self::IMAGE_SLIDES;
     }
 
     /**
@@ -140,8 +147,90 @@ final class generator {
             'job' => sha1((string)($brief['idempotencyKey'] ?? ('cmid-' . $cmid))),
             'userid' => (int)$USER->id,
         ];
+        // The editor makes a picture for each slide after the text; do the same, so a deck built
+        // by AI Course Builder does not open with empty picture panels.
+        $manifest = self::add_slide_images($manifest, $activity, $context, $baseurl, (string)$siteid, (string)$apikey,
+            $contexttext);
         \mod_productexplainer\local\manifest_storage::save($activity, $manifest, !empty($activity->enablevoiceover));
         return (string)$activity->id;
+    }
+
+    /**
+     * Make one picture per slide through the editor's own image route and store it like the editor.
+     *
+     * A picture that cannot be made is left out (the slide keeps its text); the deck still completes.
+     *
+     * @param array $manifest
+     * @param \stdClass $activity
+     * @param \context_module $context
+     * @param string $baseurl
+     * @param string $siteid
+     * @param string $apikey
+     * @param string $contexttext
+     * @return array
+     */
+    private static function add_slide_images(array $manifest, \stdClass $activity, \context_module $context,
+            string $baseurl, string $siteid, string $apikey, string $contexttext): array {
+        $fs = get_file_storage();
+        $made = 0;
+        foreach ($manifest['slides'] ?? [] as $index => $slide) {
+            if ($made >= self::IMAGE_SLIDES) {
+                break;
+            }
+            $prompt = trim((string)($slide['imagePrompt'] ?? ''));
+            if ($prompt === '' || !empty($slide['imageUrl'])) {
+                continue;
+            }
+            $made++;
+            try {
+                $curl = new \curl();
+                $curl->setopt([
+                    'CURLOPT_TIMEOUT' => 120,
+                    'CURLOPT_CONNECTTIMEOUT' => 30,
+                    'CURLOPT_RETURNTRANSFER' => true,
+                    'CURLOPT_SSL_VERIFYPEER' => true,
+                ]);
+                $curl->setHeader(['Content-Type: application/json', 'Accept: application/json']);
+                $response = $curl->post($baseurl . '/api/moodle/concept-explainer/generate-image', json_encode([
+                    'siteId' => $siteid,
+                    'apiKey' => $apikey,
+                    'imagePrompt' => $prompt,
+                    'slideIndex' => (int)$index,
+                    'creditsToUse' => self::IMAGE_PRICE,
+                    'voiceLanguage' => (string)($activity->voicelanguage ?: 'en-AU'),
+                    'context' => $contexttext,
+                ]));
+                $result = is_string($response) ? json_decode($response, true) : null;
+                if (!is_array($result) || empty($result['success']) || empty($result['imageData'])) {
+                    continue;
+                }
+                $bytes = base64_decode(preg_replace('/^data:[^;]+;base64,/', '', (string)$result['imageData']), true);
+                if ($bytes === false || $bytes === '' || @getimagesizefromstring($bytes) === false) {
+                    continue;
+                }
+                $filename = 'slide_' . (int)$index . '.jpg';
+                foreach (['jpg', 'jpeg', 'png', 'gif', 'webp'] as $ext) {
+                    $old = $fs->get_file($context->id, 'mod_productexplainer', 'slideimages', $activity->id, '/',
+                        'slide_' . (int)$index . '.' . $ext);
+                    if ($old) {
+                        $old->delete();
+                    }
+                }
+                $fs->create_file_from_string([
+                    'contextid' => $context->id,
+                    'component' => 'mod_productexplainer',
+                    'filearea' => 'slideimages',
+                    'itemid' => $activity->id,
+                    'filepath' => '/',
+                    'filename' => $filename,
+                ], $bytes);
+                $manifest['slides'][$index]['imageUrl'] = \moodle_url::make_pluginfile_url($context->id,
+                    'mod_productexplainer', 'slideimages', $activity->id, '/', $filename)->out(false);
+            } catch (\Throwable $e) {
+                debugging('Slide Flow could not make a slide picture: ' . $e->getMessage(), DEBUG_DEVELOPER);
+            }
+        }
+        return $manifest;
     }
 
     /**
