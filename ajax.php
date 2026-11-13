@@ -112,10 +112,16 @@ require_login();
         }
     }
 
-    // -----------------------------------------------------------------------
-    // Helper: make a cURL call to lms-labs.com
-    // -----------------------------------------------------------------------
-    function pe_api_call($url, $payload) {
+    /**
+     * Make a call to lms-labs.com.
+     *
+     * @param string $url
+     * @param array $payload
+     * @param float|null $credits published price, reported to Client Portal when set
+     * @param string $description what was made, for the client's invoice
+     * @return array decoded reply
+     */
+    function pe_api_call($url, $payload, $credits = null, $description = '') {
         $ch = curl_init($url);
         curl_setopt_array($ch, [
             CURLOPT_RETURNTRANSFER => true,
@@ -132,7 +138,15 @@ require_login();
             return ['success' => false, 'error' => 'API connection failed: ' . $err];
         }
         $data = json_decode($raw, true);
-        return is_array($data) ? $data : ['success' => false, 'error' => 'Invalid API response'];
+        $data = is_array($data) ? $data : ['success' => false, 'error' => 'Invalid API response'];
+        // Client Portal (when installed) bills the client: the service's figure, else the published price.
+        if ($credits !== null && method_exists('\\local_clientportal\\api', 'record_lmslabs_call')) {
+            global $USER, $context;
+            $contextid = !empty($context) ? (int)$context->id : (int)context_system::instance()->id;
+            \local_clientportal\api::record_lmslabs_call((int)$USER->id, $contextid, 'mod_productexplainer', $data,
+                (float)$credits, $description);
+        }
+        return $data;
     }
 
     // -----------------------------------------------------------------------
@@ -216,7 +230,7 @@ require_login();
             'questionCount'   => $quizcount,
             'creditsToUse'    => $creditsToUse,
             'voiceLanguage'   => $productVoiceLanguage,
-        ]);
+        ], 10, 'Product slides');
 
         echo json_encode($result);
         exit;
@@ -270,7 +284,7 @@ require_login();
             'questionCount'    => $quizcount,
             'creditsToUse'     => 10,
             'voiceLanguage'    => $conceptVoiceLanguage,
-        ]);
+        ], 10, 'Concept slides');
 
         echo json_encode($result);
         exit;
@@ -298,7 +312,7 @@ require_login();
             'creditsToUse'  => 2,
             'voiceLanguage' => $pe->voicelanguage ?: 'en-AU',
             'context'       => $body['context'] ?? '',
-        ]);
+        ], 2, 'Concept image');
 
         if (empty($result['success']) || empty($result['imageData'])) {
             echo json_encode(['success' => false, 'error' => $result['error'] ?? 'Image generation failed.']);
@@ -454,7 +468,7 @@ require_login();
             'voiceId'     => $voiceId,
             'voiceGender' => $voiceName,
             'creditsToUse' => 3,
-        ]);
+        ], 3, 'Slide voiceover');
 
         if (empty($result['success']) || empty($result['audioContent'])) {
             echo json_encode(['success' => false, 'error' => $result['error'] ?? 'TTS generation failed.']);
@@ -571,7 +585,7 @@ require_login();
             'voiceId'      => $voiceId,
             'voiceGender'  => $voiceName,
             'creditsToUse' => 1,
-        ]);
+        ], 0, 'Quiz voice');
 
         if (empty($result['success']) || empty($result['audioContent'])) {
             echo json_encode(['success' => false, 'error' => $result['error'] ?? 'TTS generation failed.']);

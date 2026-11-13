@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.1] - 2026-11-13
+
+### Added
+- Works with Client Portal 2.0.1 and later: each LMS Labs AI call made in a client's course, or by a client's people, is reported to the portal with the credits it used, so the site owner can see and invoice each client's usage. The service's own figure is used when its reply gives one; otherwise the plugin's published price. Calls that fail and polled jobs are never counted twice. Nothing changes on sites without Client Portal.
+
 ## [1.1.0] - 2026-11-10
 - A deck built by AI Course Builder now gets a picture on each of its seven slides, made through the editor's own image route (2 credits each, the same as "New image"), so it no longer opens with empty picture panels. The Course Builder price is 24 credits (10 for the slides and 14 for the pictures). If a picture cannot be made, that slide keeps its text and the deck still completes.
 
