@@ -1,5 +1,10 @@
 # Changelog
 
+## [1.1.2] - 2026-11-24
+
+- Fixed: the course "Default activity completion" page (Moodle 4.3 and later) could not show Slide Flow's "Pass the knowledge quiz" rule. With developer debugging on, the whole page failed with "Could not add custom completion rule of module productexplainer". The rule and its pass mark now work on that page, and defaults saved there apply to new Slide Flow activities.
+- Added a test data generator, so the activity can be created by Moodle's automated tests and by demo and course-building tools. Tests cover creating, listing, deleting, backing up and restoring the activity.
+
 ## [1.1.1] - 2026-11-13
 
 ### Added

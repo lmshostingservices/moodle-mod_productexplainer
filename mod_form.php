@@ -254,9 +254,12 @@ class mod_productexplainer_mod_form extends moodleform_mod {
 
     public function add_completion_rules() {
         $mform = $this->_form;
+        $suffix = $this->completion_suffix();
+        $quiz = 'completionquiz' . $suffix;
+        $percent = 'completionquizpercent' . $suffix;
 
-        $mform->addElement('checkbox', 'completionquiz', '', get_string('completionquiz', 'productexplainer'));
-        $mform->addHelpButton('completionquiz', 'completionquiz', 'productexplainer');
+        $mform->addElement('checkbox', $quiz, '', get_string('completionquiz', 'productexplainer'));
+        $mform->addHelpButton($quiz, 'completionquiz', 'productexplainer');
 
         $options = [
             100 => '100%',
@@ -266,22 +269,67 @@ class mod_productexplainer_mod_form extends moodleform_mod {
             60  => '60%',
             50  => '50%',
         ];
-        $mform->addElement('select', 'completionquizpercent', get_string('completionquizpercent', 'productexplainer'), $options);
-        $mform->setDefault('completionquizpercent', 100);
-        $mform->hideIf('completionquizpercent', 'completionquiz', 'notchecked');
+        $mform->addElement('select', $percent, get_string('completionquizpercent', 'productexplainer'), $options);
+        $mform->setDefault($percent, 100);
+        $mform->hideIf($percent, $quiz, 'notchecked');
 
-        return ['completionquiz'];
+        return [$quiz];
     }
 
+    /**
+     * Suffix Moodle 4.3+ adds to completion fields on the bulk "Default activity completion" form.
+     *
+     * @return string
+     */
+    protected function completion_suffix(): string {
+        return method_exists($this, 'get_suffix') ? $this->get_suffix() : '';
+    }
+
+    /**
+     * Whether the custom completion rule is switched on.
+     *
+     * @param array $data Submitted form data.
+     * @return bool
+     */
     public function completion_rule_enabled($data) {
-        return !empty($data['completionquiz']);
+        return !empty($data['completionquiz' . $this->completion_suffix()]);
     }
 
+    /**
+     * Copies the suffixed completion fields back to their column names.
+     *
+     * @param stdClass $data Submitted form data.
+     */
     public function data_postprocessing($data) {
         parent::data_postprocessing($data);
+        $suffix = $this->completion_suffix();
+        if ($suffix !== '') {
+            foreach (['completionquiz', 'completionquizpercent'] as $field) {
+                if (isset($data->{$field . $suffix})) {
+                    $data->{$field} = $data->{$field . $suffix};
+                }
+            }
+        }
         if (isset($data->completionunlocked)) {
             if (empty($data->completionquiz)) {
                 $data->completionquiz = 0;
+            }
+        }
+    }
+
+    /**
+     * Fills the suffixed completion fields from the saved values.
+     *
+     * @param array $defaultvalues Form defaults, passed by reference.
+     */
+    public function data_preprocessing(&$defaultvalues) {
+        parent::data_preprocessing($defaultvalues);
+        $suffix = $this->completion_suffix();
+        if ($suffix !== '') {
+            foreach (['completionquiz', 'completionquizpercent'] as $field) {
+                if (isset($defaultvalues[$field])) {
+                    $defaultvalues[$field . $suffix] = $defaultvalues[$field];
+                }
             }
         }
     }

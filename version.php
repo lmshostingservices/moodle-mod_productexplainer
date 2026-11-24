@@ -26,8 +26,8 @@
 
 defined('MOODLE_INTERNAL') || die();
 
-$plugin->version   = 2026111300;
+$plugin->version   = 2026112400;
 $plugin->requires  = 2022041900;      // Moodle 4.0.
 $plugin->component = 'mod_productexplainer';
 $plugin->maturity  = MATURITY_STABLE;
-$plugin->release   = '1.1.1';
+$plugin->release   = '1.1.2';
