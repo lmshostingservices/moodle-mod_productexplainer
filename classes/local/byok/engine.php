@@ -855,7 +855,7 @@ Return JSON matching this exact schema:
                 $repaired = json_decode($raw, false, 512, JSON_THROW_ON_ERROR);
                 $quiz = is_object($repaired) && property_exists($repaired, 'quizQuestions') ? $repaired->quizQuestions : null;
                 if (!self::complete_quiz($quiz)) {
-                    throw new \coding_exception('Incomplete concept quiz');
+                    throw new \RuntimeException('Incomplete concept quiz');
                 }
                 $manifest->quizQuestions = $quiz;
             } catch (\Throwable $e) {
@@ -913,7 +913,7 @@ Return JSON matching this exact schema:
         try {
             $bytes = (self::$image)($prompt . ' ' . self::UNBRANDED_RULE);
             if ($bytes === '') {
-                throw new \coding_exception('Image provider returned no image');
+                throw new \RuntimeException('Image provider returned no image');
             }
             $data = self::optimise($bytes);
         } catch (\Throwable $e) {
@@ -1003,7 +1003,7 @@ Return JSON matching this exact schema:
             try {
                 $audio = (self::$tts)($text, $voiceid, $language, $format);
                 if ($audio === '') {
-                    throw new \coding_exception('No audio content in TTS response');
+                    throw new \RuntimeException('No audio content in TTS response');
                 }
                 return $audio;
             } catch (\Throwable $e) {
@@ -1099,7 +1099,7 @@ Return JSON matching this exact schema:
             $offset = $start + $length;
         }
         if ($last <= 0) {
-            throw new \coding_exception('Could not determine OGG duration');
+            throw new \RuntimeException('Could not determine OGG duration');
         }
         return max(0.1, ($last - $preskip) / 48000);
     }
@@ -1113,7 +1113,7 @@ Return JSON matching this exact schema:
     public static function optimise(string $raw): string {
         $src = @imagecreatefromstring($raw);
         if ($src === false) {
-            throw new \coding_exception('Input buffer contains unsupported image format');
+            throw new \RuntimeException('Input buffer contains unsupported image format');
         }
         $w = imagesx($src);
         $h = imagesy($src);
