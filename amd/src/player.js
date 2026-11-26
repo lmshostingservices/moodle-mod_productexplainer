@@ -146,11 +146,35 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
     }
     var VO_CREDITS_PER_SLIDE = 5;
 
+    // Bring your own AI: work that runs on the site's own AI costs no LMS Labs credits.
+    function ownAi(kind) {
+        return !!(cfg && cfg.ownAi && cfg.ownAi[kind]);
+    }
+    var OWN_AI_BADGE = '<span class="pe-ownai-badge"><i class="fa fa-microchip" aria-hidden="true"></i> Your own AI</span>';
+    function voiceCost() {
+        return ownAi('voice') ? 'use your own AI' : 'charge credits';
+    }
     function genBtnLabel(count) {
-        return icon('sparkles') + 'Generate ' + count + ' Training Slides <span class="pe-credit-badge">' + slideCredits(count) + ' credits</span>';
+        return icon('sparkles') + 'Generate ' + count + ' Training Slides <span class="pe-credit-badge">'
+            + (ownAi('text') ? 'Your own AI' : slideCredits(count) + ' credits') + '</span>';
     }
     function voPanelDesc(count) {
+        if (ownAi('voice')) {
+            return 'Generate narration for all ' + count + ' slides &mdash; narrated on <strong>your own AI</strong>';
+        }
         return 'Generate narration for all ' + count + ' slides &mdash; <strong>' + (count * VO_CREDITS_PER_SLIDE) + ' credits</strong> total';
+    }
+    function conceptBadge() {
+        if (ownAi('text')) {
+            return ownAi('image') ? 'Your own AI' : 'Your own AI + image credits';
+        }
+        return ownAi('image') ? '10 credits' : '10 credits + images';
+    }
+    function conceptCostNote() {
+        var text = ownAi('text') ? 'written on <strong>your own AI</strong>' : '<strong>10 credits</strong> to generate';
+        var images = ownAi('image') ? 'AI images drawn on <strong>your own AI</strong>'
+            : '<strong>2 credits</strong> per AI image (7 images = 14 credits)';
+        return '7 slides &mdash; ' + text + ' + ' + images;
     }
 
     // ── Init ────────────────────────────────────────────────────────────────────
@@ -308,8 +332,13 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
         html += '<label class="pe-label" for="pe-slide-count">Number of Slides</label>';
         html += '<div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">';
         html += '<input type="number" class="pe-input" id="pe-slide-count" min="3" max="20" value="6" style="width:80px;text-align:center;">';
-        html += '<span id="pe-slide-credits-hint" style="font-size:0.85rem;color:#374151;">' + slideCredits(6) + ' credits to generate</span>';
-        html += '<span style="font-size:0.8rem;color:#9ca3af;">Voiceover: +' + VO_CREDITS_PER_SLIDE + ' credits per slide</span>';
+        if (ownAi('text')) {
+            html += OWN_AI_BADGE;
+        } else {
+            html += '<span id="pe-slide-credits-hint" style="font-size:0.85rem;color:#374151;">' + slideCredits(6) + ' credits to generate</span>';
+        }
+        html += '<span style="font-size:0.8rem;color:#9ca3af;">' + (ownAi('voice') ? 'Voiceover: narrated on your own AI'
+            : 'Voiceover: +' + VO_CREDITS_PER_SLIDE + ' credits per slide') + '</span>';
         html += '</div>';
         html += '</div>';
 
@@ -572,12 +601,12 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
 
         // Credits note
         html += '<div class="pe-concept-credits-note">';
-        html += icon('zap') + '<span>7 slides &mdash; <strong>10 credits</strong> to generate + <strong>2 credits</strong> per AI image (7 images = 14 credits)</span>';
+        html += icon('zap') + '<span>' + conceptCostNote() + '</span>';
         html += '</div>';
 
         // Generate button
         html += '<div class="pe-actions-row">';
-        html += '<button class="pe-btn pe-btn-concept" id="pe-concept-generate-btn">' + icon('sparkles') + 'Generate Concept Explainer <span class="pe-credit-badge">10 credits + images</span></button>';
+        html += '<button class="pe-btn pe-btn-concept" id="pe-concept-generate-btn">' + icon('sparkles') + 'Generate Concept Explainer <span class="pe-credit-badge">' + conceptBadge() + '</span></button>';
         html += '</div>';
         html += '<div id="pe-concept-generate-status"></div>';
         html += '<div id="pe-concept-image-progress" style="display:none;margin-top:8px;"></div>';
@@ -912,7 +941,7 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
             voiceLanguage: conceptSelectedLanguage,
             quizCount: selectedQuizCount
         }), function(data) {
-            if (btn) { btn.disabled = false; btn.innerHTML = icon('sparkles') + 'Generate Concept Explainer <span class="pe-credit-badge">10 credits + images</span>'; }
+            if (btn) { btn.disabled = false; btn.innerHTML = icon('sparkles') + 'Generate Concept Explainer <span class="pe-credit-badge">' + conceptBadge() + '</span>'; }
             if (data && data.success && data.manifest) {
                 manifest = data.manifest;
                 manifest.mode = 'concept';
@@ -925,7 +954,7 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
                 showStatus('pe-concept-generate-status', 'Generation failed: ' + escHtml(data && data.error ? data.error : 'Unknown error'), 'error');
             }
         }, function(err) {
-            if (btn) { btn.disabled = false; btn.innerHTML = icon('sparkles') + 'Generate Concept Explainer <span class="pe-credit-badge">10 credits + images</span>'; }
+            if (btn) { btn.disabled = false; btn.innerHTML = icon('sparkles') + 'Generate Concept Explainer <span class="pe-credit-badge">' + conceptBadge() + '</span>'; }
             setGenerationRunning(false);
             showStatus('pe-concept-generate-status', 'Request failed: ' + escHtml(err), 'error');
         });
@@ -943,7 +972,7 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
         var html = '<div class="pe-slide-img-overlay">'
             + '<button class="pe-slide-img-upload-btn">' + icon('upload') + ' Upload image<input type="file" class="pe-img-file-input" data-slide="' + slideIdx + '" accept="image/*"></button>';
         if (slide && slide.imagePrompt) {
-            html += '<button class="pe-slide-img-regen-btn" data-slide="' + slideIdx + '" data-action="regen-image">' + icon('sparkles') + ' New image <span class="pe-img-credit-pill">2 credits</span></button>';
+            html += '<button class="pe-slide-img-regen-btn" data-slide="' + slideIdx + '" data-action="regen-image">' + icon('sparkles') + ' New image <span class="pe-img-credit-pill">' + (ownAi('image') ? 'Own AI' : '2 credits') + '</span></button>';
         }
         html += '<button class="pe-slide-img-toggle-btn pe-slide-img-toggle-btn--remove" data-slide="' + slideIdx + '" data-action="remove-image">' + icon('x') + ' Remove</button>'
             + '</div>';
@@ -1027,7 +1056,8 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
         html += '<span class="pe-narration-header-icon">' + icon('edit') + '</span>';
         html += '<div>';
         html += '<p class="pe-narration-title">Narration Scripts</p>';
-        html += '<p class="pe-narration-desc">Review and edit the spoken narration for each slide <strong>before</strong> generating voiceover &mdash; editing after costs extra credits.</p>';
+        html += '<p class="pe-narration-desc">Review and edit the spoken narration for each slide <strong>before</strong> generating voiceover &mdash; editing after '
+            + (ownAi('voice') ? 'means narrating that slide again on your own AI.' : 'costs extra credits.') + '</p>';
         html += '</div>';
         html += '</div>';
         html += '<button class="pe-narration-toggle-btn" id="pe-narration-toggle-btn" type="button">' + chevDown + '<span>Expand</span></button>';
@@ -1669,7 +1699,7 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
     function handleGenerateAllVoiceovers() {
         if (generationRunning || !manifest || !manifest.slides) return;
         if (manifest.slides.some(function(slide) { return slide.narrationGenerationFailed; })
-                && !window.confirm('Retrying failed narration may charge credits again if the service completed an uncertain request. Completed, unchanged recordings will not be regenerated. Continue?')) return;
+                && !window.confirm('Retrying failed narration may ' + voiceCost() + ' again if the service completed an uncertain request. Completed, unchanged recordings will not be regenerated. Continue?')) return;
         setGenerationRunning(true);
         lastVoiceoverError = '';
         var btn = document.getElementById('pe-vo-btn');
@@ -1695,7 +1725,7 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
                         statusEl.textContent = (slides.length - failCount) + ' of ' + slides.length
                             + ' voiceovers generated. Failed on slide'
                             + (failedSlides.length === 1 ? ' ' : 's ') + failedSlides.join(', ')
-                            + '. Existing recordings are retained. Retry is manual and may charge credits again if the service completed an uncertain request.'
+                            + '. Existing recordings are retained. Retry is manual and may ' + voiceCost() + ' again if the service completed an uncertain request.'
                             + (lastVoiceoverError ? ' (' + lastVoiceoverError + ')' : '');
                     }
                 } else {
@@ -3670,7 +3700,7 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
             document.getElementById('pe-quiz-audio-retry').onclick = function() {
                 notice.remove();
                 if (audio) { audio.load(); play(); }
-                else if (window.confirm('A new narration request may charge credits again if the earlier request completed. Retry?')) {
+                else if (window.confirm('A new narration request may ' + voiceCost() + ' again if the earlier request completed. Retry?')) {
                     speakQuizText(text, onEnd);
                 } else failure(message);
             };
@@ -3700,7 +3730,7 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
             function(data) {
                 if (genId !== quizTtsGenId || finished) return;
                 if (!data || !data.success || !data.audioContent) {
-                    failure((data && data.error) || 'Quiz narration generation failed. Retry is manual and may charge credits.');
+                    failure((data && data.error) || 'Quiz narration generation failed. Retry is manual and may ' + voiceCost() + '.');
                     return;
                 }
                 try {
@@ -3709,9 +3739,9 @@ define('mod_productexplainer/player', ['mod_productexplainer/narration'], functi
                     audio = new Audio(quizAudioUrl);
                     quizCurrentAudio = audio;
                     play();
-                } catch (e) { failure('The service returned unreadable quiz audio. Retry is manual and may charge credits.'); }
+                } catch (e) { failure('The service returned unreadable quiz audio. Retry is manual and may ' + voiceCost() + '.'); }
             }, function(err) {
-                failure('Quiz narration request failed: ' + err + '. Retry is manual and may charge credits if the service completed the earlier request.');
+                failure('Quiz narration request failed: ' + err + '. Retry is manual and may ' + voiceCost() + ' if the service completed the earlier request.');
             });
     }
 

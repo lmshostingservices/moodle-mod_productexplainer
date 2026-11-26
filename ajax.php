@@ -220,7 +220,7 @@ require_login();
         }
         $productVoiceLanguage = $pe->voicelanguage ?: 'en-AU';
 
-        $result = pe_api_call($apibaseurl . '/api/moodle/product-explainer/generate', [
+        $payload = [
             'siteId'          => $siteid,
             'apiKey'          => $apikey,
             'productName'     => $productName,
@@ -230,7 +230,10 @@ require_login();
             'questionCount'   => $quizcount,
             'creditsToUse'    => $creditsToUse,
             'voiceLanguage'   => $productVoiceLanguage,
-        ], 10, 'Product slides');
+        ];
+        // Bring your own AI: the deck is written on the site's own AI instead of LMS Labs credits.
+        $result = \mod_productexplainer\byok::uses('text') ? \mod_productexplainer\byok::product($payload)
+            : pe_api_call($apibaseurl . '/api/moodle/product-explainer/generate', $payload, 10, 'Product slides');
 
         echo json_encode($result);
         exit;
@@ -272,7 +275,7 @@ require_login();
         }
         $conceptVoiceLanguage = $pe->voicelanguage ?: 'en-AU';
 
-        $result = pe_api_call($apibaseurl . '/api/moodle/concept-explainer/generate', [
+        $payload = [
             'siteId'           => $siteid,
             'apiKey'           => $apikey,
             'conceptName'      => $conceptName,
@@ -284,7 +287,9 @@ require_login();
             'questionCount'    => $quizcount,
             'creditsToUse'     => 10,
             'voiceLanguage'    => $conceptVoiceLanguage,
-        ], 10, 'Concept slides');
+        ];
+        $result = \mod_productexplainer\byok::uses('text') ? \mod_productexplainer\byok::concept($payload)
+            : pe_api_call($apibaseurl . '/api/moodle/concept-explainer/generate', $payload, 10, 'Concept slides');
 
         echo json_encode($result);
         exit;
@@ -304,7 +309,7 @@ require_login();
             exit;
         }
 
-        $result = pe_api_call($apibaseurl . '/api/moodle/concept-explainer/generate-image', [
+        $payload = [
             'siteId'        => $siteid,
             'apiKey'        => $apikey,
             'imagePrompt'   => $imagePrompt,
@@ -312,7 +317,9 @@ require_login();
             'creditsToUse'  => 2,
             'voiceLanguage' => $pe->voicelanguage ?: 'en-AU',
             'context'       => $body['context'] ?? '',
-        ], 2, 'Concept image');
+        ];
+        $result = \mod_productexplainer\byok::uses('image') ? \mod_productexplainer\byok::image($payload)
+            : pe_api_call($apibaseurl . '/api/moodle/concept-explainer/generate-image', $payload, 2, 'Concept image');
 
         if (empty($result['success']) || empty($result['imageData'])) {
             echo json_encode(['success' => false, 'error' => $result['error'] ?? 'Image generation failed.']);
@@ -460,7 +467,7 @@ require_login();
         $region    = $langParts[1] ?? 'AU';
         $voiceId   = $langCode . '-' . $region . '-Chirp3-HD-' . $voiceName;
 
-        $result = pe_api_call($apibaseurl . '/api/moodle/content-creator/tts', [
+        $payload = [
             'siteId'      => $siteid,
             'apiKey'      => $apikey,
             'text'        => $text,
@@ -468,7 +475,9 @@ require_login();
             'voiceId'     => $voiceId,
             'voiceGender' => $voiceName,
             'creditsToUse' => 3,
-        ], 3, 'Slide voiceover');
+        ];
+        $result = \mod_productexplainer\byok::uses('voice') ? \mod_productexplainer\byok::tts($payload)
+            : pe_api_call($apibaseurl . '/api/moodle/content-creator/tts', $payload, 3, 'Slide voiceover');
 
         if (empty($result['success']) || empty($result['audioContent'])) {
             echo json_encode(['success' => false, 'error' => $result['error'] ?? 'TTS generation failed.']);
@@ -577,7 +586,7 @@ require_login();
         $region    = $langParts[1] ?? 'AU';
         $voiceId   = $langCode . '-' . $region . '-Chirp3-HD-' . $voiceName;
 
-        $result = pe_api_call($apibaseurl . '/api/moodle/content-creator/tts', [
+        $payload = [
             'siteId'       => $siteid,
             'apiKey'       => $apikey,
             'text'         => $text,
@@ -585,7 +594,9 @@ require_login();
             'voiceId'      => $voiceId,
             'voiceGender'  => $voiceName,
             'creditsToUse' => 1,
-        ], 0, 'Quiz voice');
+        ];
+        $result = \mod_productexplainer\byok::uses('voice') ? \mod_productexplainer\byok::tts($payload)
+            : pe_api_call($apibaseurl . '/api/moodle/content-creator/tts', $payload, 0, 'Quiz voice');
 
         if (empty($result['success']) || empty($result['audioContent'])) {
             echo json_encode(['success' => false, 'error' => $result['error'] ?? 'TTS generation failed.']);

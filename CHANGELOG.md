@@ -1,5 +1,12 @@
 # Changelog
 
+## [1.2.0] - 2026-11-26
+
+### Added
+- Bring your own AI. With an LMS Labs Bring your own AI licence, AI Grader Central Config can run Slide Flow's work on the site's own AI (the Moodle AI subsystem or the site's own key) instead of LMS Labs credits. Slide text (product and concept decks), slide pictures and narration are set separately, so a site can, for example, write slides on its own AI and keep narrating on credits.
+- Work on the site's own AI runs the LMS Labs service's own logic inside Moodle: the same prompts, checks on the AI's answer, quiz repair, picture prompt and narration chunking. It was checked against the service on more than 8,000 generated requests with identical results.
+- The editor shows "Your own AI" instead of a credit price for work that runs on the site's own AI, and AI Course Builder estimates no credits for it.
+
 ## [1.1.2] - 2026-11-24
 
 - Fixed: the course "Default activity completion" page (Moodle 4.3 and later) could not show Slide Flow's "Pass the knowledge quiz" rule. With developer debugging on, the whole page failed with "Could not add custom completion rule of module productexplainer". The rule and its pass mark now work on that page, and defaults saved there apply to new Slide Flow activities.
