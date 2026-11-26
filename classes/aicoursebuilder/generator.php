@@ -45,8 +45,10 @@ final class generator {
      * @return int
      */
     public static function native_estimate(array $brief): int {
-        // The seven slides and the picture on each, as when a teacher makes the deck by hand.
-        return self::CONCEPT_PRICE + self::IMAGE_PRICE * self::IMAGE_SLIDES;
+        // The seven slides and the picture on each, as when a teacher makes the deck by hand. Work on the site's own
+        // AI (Bring your own AI) costs no credits.
+        return (\mod_productexplainer\byok::uses('text') ? 0 : self::CONCEPT_PRICE)
+            + (\mod_productexplainer\byok::uses('image') ? 0 : self::IMAGE_PRICE * self::IMAGE_SLIDES);
     }
 
     /**
@@ -81,7 +83,8 @@ final class generator {
         $apikey = function_exists('local_aiconfig_get_apikey')
             ? local_aiconfig_get_apikey(self::COMPONENT)
             : (get_config('local_aiconfig', 'apikey') ?: get_config(self::COMPONENT, 'apikey'));
-        if (trim((string)$siteid) === '' || trim((string)$apikey) === '') {
+        $ownai = \mod_productexplainer\byok::uses('text');
+        if (!$ownai && (trim((string)$siteid) === '' || trim((string)$apikey) === '')) {
             throw new \moodle_exception('missingcredentials', 'mod_productexplainer');
         }
 
@@ -122,18 +125,24 @@ final class generator {
             'voiceLanguage' => (string)($activity->voicelanguage ?: 'en-AU'),
         ];
 
-        $curl = new \curl();
-        $curl->setopt([
-            'CURLOPT_TIMEOUT' => 180,
-            'CURLOPT_CONNECTTIMEOUT' => 30,
-            'CURLOPT_RETURNTRANSFER' => true,
-            'CURLOPT_SSL_VERIFYPEER' => true,
-        ]);
-        $curl->setHeader(['Content-Type: application/json', 'Accept: application/json']);
-        $response = $curl->post($baseurl . '/api/moodle/concept-explainer/generate', json_encode($payload));
-        $info = $curl->get_info();
-        $httpcode = (int)($info['http_code'] ?? 0);
-        $result = is_string($response) ? json_decode($response, true) : null;
+        if ($ownai) {
+            // Bring your own AI: the deck is written on the site's own AI, as the service would write it.
+            $result = json_decode(json_encode(\mod_productexplainer\byok::concept($payload)), true);
+            $httpcode = !empty($result['success']) ? 200 : 500;
+        } else {
+            $curl = new \curl();
+            $curl->setopt([
+                'CURLOPT_TIMEOUT' => 180,
+                'CURLOPT_CONNECTTIMEOUT' => 30,
+                'CURLOPT_RETURNTRANSFER' => true,
+                'CURLOPT_SSL_VERIFYPEER' => true,
+            ]);
+            $curl->setHeader(['Content-Type: application/json', 'Accept: application/json']);
+            $response = $curl->post($baseurl . '/api/moodle/concept-explainer/generate', json_encode($payload));
+            $info = $curl->get_info();
+            $httpcode = (int)($info['http_code'] ?? 0);
+            $result = is_string($response) ? json_decode($response, true) : null;
+        }
         if ($httpcode < 200 || $httpcode >= 300 || !is_array($result) || empty($result['success'])
                 || !is_array($result['manifest'] ?? null)) {
             $reason = is_array($result) ? (string)($result['error'] ?? '') : '';
@@ -183,15 +192,7 @@ final class generator {
             }
             $made++;
             try {
-                $curl = new \curl();
-                $curl->setopt([
-                    'CURLOPT_TIMEOUT' => 120,
-                    'CURLOPT_CONNECTTIMEOUT' => 30,
-                    'CURLOPT_RETURNTRANSFER' => true,
-                    'CURLOPT_SSL_VERIFYPEER' => true,
-                ]);
-                $curl->setHeader(['Content-Type: application/json', 'Accept: application/json']);
-                $response = $curl->post($baseurl . '/api/moodle/concept-explainer/generate-image', json_encode([
+                $request = [
                     'siteId' => $siteid,
                     'apiKey' => $apikey,
                     'imagePrompt' => $prompt,
@@ -199,8 +200,22 @@ final class generator {
                     'creditsToUse' => self::IMAGE_PRICE,
                     'voiceLanguage' => (string)($activity->voicelanguage ?: 'en-AU'),
                     'context' => $contexttext,
-                ]));
-                $result = is_string($response) ? json_decode($response, true) : null;
+                ];
+                if (\mod_productexplainer\byok::uses('image')) {
+                    // Bring your own AI: drawn on the site's own image AI.
+                    $result = \mod_productexplainer\byok::image($request);
+                } else {
+                    $curl = new \curl();
+                    $curl->setopt([
+                        'CURLOPT_TIMEOUT' => 120,
+                        'CURLOPT_CONNECTTIMEOUT' => 30,
+                        'CURLOPT_RETURNTRANSFER' => true,
+                        'CURLOPT_SSL_VERIFYPEER' => true,
+                    ]);
+                    $curl->setHeader(['Content-Type: application/json', 'Accept: application/json']);
+                    $response = $curl->post($baseurl . '/api/moodle/concept-explainer/generate-image', json_encode($request));
+                    $result = is_string($response) ? json_decode($response, true) : null;
+                }
                 if (!is_array($result) || empty($result['success']) || empty($result['imageData'])) {
                     continue;
                 }

@@ -149,6 +149,8 @@ $PAGE->requires->js_call_amd('mod_productexplainer/player', 'init', [[
     'canManage'            => $canManage,
     'sesskey'              => sesskey(),
     'ajaxUrl'              => (new moodle_url('/mod/productexplainer/ajax.php'))->out(false),
+    // Bring your own AI: which work runs on the site's own AI, so the editor shows no credit prices for it.
+    'ownAi'                => \mod_productexplainer\byok::state(),
 ]]);
 
 echo $OUTPUT->header();
